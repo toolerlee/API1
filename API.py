@@ -41,6 +41,7 @@ def main_job():
         return random.choice(uas)
     DEBUG = False
     # 讀取 config.txt 設定
+    print("讀取 config.txt ...")
     config = {
         'mode': 0,
         'max_concurrent_accounts': 30,
@@ -389,13 +390,18 @@ def main_job():
 
 @app.route('/run_main', methods=['POST'])
 def run_main():
+    print("收到 /run_main 請求")
     if status["running"]:
+        print("狀態 busy")
         return jsonify({"status": "busy"})
     def job():
+        print("main_job 執行開始")
         status["running"] = True
         status["result"] = main_job()
         status["running"] = False
+        print("main_job 執行結束")
     threading.Thread(target=job).start()
+    print("已啟動新 thread")
     return jsonify({"status": "started"})
 
 @app.route('/status', methods=['GET'])

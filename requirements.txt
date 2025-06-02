@@ -1,0 +1,8 @@
+flask
+dropbox
+ddddocr
+requests
+openpyxl
+pandas
+beautifulsoup4
+pillow

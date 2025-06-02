@@ -396,10 +396,11 @@ def run_main():
         return jsonify({"status": "busy"})
     def job():
         print("main_job 執行開始")
-        status["running"] = True
-        status["result"] = main_job()
-        status["running"] = False
+        import time
+        time.sleep(2)
         print("main_job 執行結束")
+        status["result"] = "測試完成"
+        status["running"] = False
     threading.Thread(target=job).start()
     print("已啟動新 thread")
     return jsonify({"status": "started"})

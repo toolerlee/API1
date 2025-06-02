@@ -3,12 +3,15 @@ import threading
 import dropbox
 import os
 
+print("=== Flask API 啟動 ===")
+
 app = Flask(__name__)
 
 status = {"running": False, "result": None}
 
 # 將原本的主流程包成一個函數
 def main_job():
+    print("=== main_job 啟動 ===")
     import os
     import json
     import ddddocr
@@ -400,5 +403,6 @@ def get_status():
     return jsonify(status)
 
 if __name__ == '__main__':
+    print("=== 進入 __main__ 啟動 Flask ===")
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)

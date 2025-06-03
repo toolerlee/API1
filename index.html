@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API 控制面板</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #message {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background-color: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }
+        pre { background-color: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>API 控制面板</h1>
+        <button onclick="runMainScript()">執行主要腳本</button>
+        <button onclick="checkStatus()">檢查狀態</button>
+        <div id="message">點擊按鈕以執行操作。</div>
+        <h2>日誌/結果:</h2>
+        <pre id="statusResult"></pre>
+    </div>
+
+    <script>
+        const messageDiv = document.getElementById('message');
+        const statusResultDiv = document.getElementById('statusResult');
+
+        async function runMainScript() {
+            messageDiv.textContent = '正在請求執行腳本...';
+            messageDiv.className = 'info';
+            statusResultDiv.textContent = ''; // 清空之前的狀態結果
+
+            try {
+                const response = await fetch('/run_main', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    messageDiv.textContent = '請求已發送！狀態：' + (data.message || data.status);
+                    messageDiv.className = 'success';
+                    // 稍後自動檢查狀態
+                    setTimeout(checkStatus, 2000);
+                } else {
+                    messageDiv.textContent = '請求失敗：' + (data.message || data.status || response.statusText);
+                    messageDiv.className = 'error';
+                }
+            } catch (error) {
+                console.error('執行腳本錯誤:', error);
+                messageDiv.textContent = '執行腳本時發生錯誤: ' + error.message;
+                messageDiv.className = 'error';
+            }
+        }
+
+        async function checkStatus() {
+            messageDiv.textContent = '正在檢查狀態...';
+            messageDiv.className = 'info';
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                if (response.ok) {
+                    messageDiv.textContent = '狀態檢查完成。';
+                    messageDiv.className = 'success';
+                    statusResultDiv.textContent = JSON.stringify(data, null, 2);
+                    // 如果仍在運行，可以設置定時器持續檢查
+                    if (data.running) {
+                       messageDiv.textContent += ' 腳本仍在運行中...';
+                       setTimeout(checkStatus, 5000); // 每5秒檢查一次
+                    } else if (data.result) {
+                        messageDiv.textContent += ' 腳本執行完畢。';
+                    }
+                } else {
+                    messageDiv.textContent = '檢查狀態失敗：' + (data.error || response.statusText);
+                    messageDiv.className = 'error';
+                    statusResultDiv.textContent = JSON.stringify(data, null, 2);
+                }
+            } catch (error) {
+                console.error('檢查狀態錯誤:', error);
+                messageDiv.textContent = '檢查狀態時發生錯誤: ' + error.message;
+                messageDiv.className = 'error';
+                statusResultDiv.textContent = '無法獲取狀態。';
+            }
+        }
+        // 頁面載入時檢查一次狀態
+        checkStatus();
+    </script>
+</body>
+</html> 

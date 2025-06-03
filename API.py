@@ -34,6 +34,20 @@ def main_job():
     import glob
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import random
+
+    # 初始化 OCR 實例 (在所有 import 之後，config 讀取之前或之後均可，但在 ThreadPoolExecutor 之前)
+    # 使用 show_ad=False 可以避免一些不必要的日誌或行為
+    try:
+        ocr_instance = ddddocr.DdddOcr(show_ad=False)
+        print("ddddocr.DdddOcr 實例已在 main_job 中成功初始化。")
+    except Exception as e_ocr_init:
+        print(f"錯誤：在 main_job 中初始化 ddddocr.DdddOcr 失敗: {e_ocr_init}")
+        # 根據您的錯誤處理策略，這裡可能需要 return 或引發更上層的錯誤
+        status["result"] = f"錯誤：OCR組件初始化失敗: {e_ocr_init}"
+        status["progress"] = "OCR 初始化失敗"
+        status["running"] = False
+        return # 如果 OCR 初始化失敗，則無法繼續
+
     result_log = []
     try:
         def get_random_ua():
@@ -196,51 +210,124 @@ def main_job():
                     time.sleep(retry_delay)
                     return make_request(session, url, method, headers, data, retry_count+1)
                 raise
-        def fetch_account_data(name, ACCOUNT, PASSWORD):
+        def fetch_account_data(name, ACCOUNT, PASSWORD, ocr):
+            thread_id = threading.get_ident()
+            
+            def log_detail(message):
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                full_message = f"[{timestamp}] [Thread-{thread_id}] [Acc: {name}] {message}"
+                print(full_message)
+
+            log_detail("處理開始")
+            process_start_time = time.time()
+            
             session = requests.Session()
             login_url = "https://member.star-rich.net/login"
             headers = {"Referer": login_url}
+            
+            login_successful = False
+            actual_login_attempts = 0
+
             for attempt in range(1, max_login_attempts + 1):
+                actual_login_attempts = attempt
+                log_detail(f"登入嘗試 {attempt}/{max_login_attempts} - 開始")
+                login_attempt_start_time = time.time()
+
+                log_detail("  B1. 請求登入頁面 - 開始")
+                page_req_start_time = time.time()
                 resp = make_request(session, login_url, headers=headers)
+                log_detail(f"  B1. 請求登入頁面 - 完成 (耗時: {time.time() - page_req_start_time:.2f}s)")
+                
                 soup = BeautifulSoup(resp.text, "html.parser")
                 inputs = soup.find_all("input")
                 data = {}
                 for inp in inputs:
                     name_attr = inp.get("name")
-                    value = inp.get("value", "")
+                    value_attr = inp.get("value", "")
                     if name_attr:
-                        data[name_attr] = value
+                        data[name_attr] = value_attr
+                
                 img_tag = soup.find("img", {"id": "MemberLogin1_Image1"})
+                if not img_tag or not img_tag.get("src"):
+                    log_detail("  B2. 錯誤：找不到驗證碼圖片標籤或 src。跳過此登入嘗試。")
+                    time.sleep(retry_delay)
+                    continue 
+
                 img_url = "https://member.star-rich.net/" + img_tag["src"]
-                ocr = ddddocr.DdddOcr()
+                
+                ocr_total_classification_time = 0.0
+                ocr_loop_attempts = 0
+
+                current_code = ""
                 while True:
+                    ocr_loop_attempts += 1
+                    log_detail(f"    B2a. OCR嘗試 {ocr_loop_attempts} - 請求驗證碼圖片 - 開始")
+                    ocr_img_req_start_time = time.time()
                     img_resp = make_request(session, img_url, headers=headers)
+                    log_detail(f"    B2a. OCR嘗試 {ocr_loop_attempts} - 請求驗證碼圖片 - 完成 (耗時: {time.time() - ocr_img_req_start_time:.2f}s)")
+                    
                     img_bytes = img_resp.content
-                    code = ocr.classification(img_bytes)
-                    if not (len(code) > 0 and code[-1] == '4'):
+                    
+                    log_detail(f"    B2b. OCR嘗試 {ocr_loop_attempts} - 驗證碼識別(ddddocr) - 開始")
+                    ocr_classify_start_time = time.time()
+                    current_code = ocr.classification(img_bytes)
+                    single_ocr_duration = time.time() - ocr_classify_start_time
+                    ocr_total_classification_time += single_ocr_duration
+                    log_detail(f"    B2b. OCR嘗試 {ocr_loop_attempts} - 驗證碼識別(ddddocr) - 完成 (耗時: {single_ocr_duration:.2f}s, 識別結果: {current_code})")
+                    
+                    if not (len(current_code) > 0 and current_code[-1] == '4'):
+                        log_detail(f"    B2c. OCR嘗試 {ocr_loop_attempts} - 驗證碼 '{current_code}' 符合要求，跳出OCR迴圈")
                         break
+                    else:
+                        log_detail(f"    B2c. OCR嘗試 {ocr_loop_attempts} - 驗證碼 '{current_code}' 以'4'結尾，重新獲取")
+                    
+                    if ocr_loop_attempts >= 5:
+                        log_detail(f"    B2d. OCR嘗試超過 {ocr_loop_attempts} 次，強制使用最後結果 '{current_code}' 並跳出OCR迴圈")
+                        break
+                
                 data["MemberLogin1$txtAccound"] = ACCOUNT
                 data["MemberLogin1$txtPassword"] = PASSWORD
-                data["MemberLogin1$txtCode"] = code
+                data["MemberLogin1$txtCode"] = current_code
                 data["__EVENTTARGET"] = "MemberLogin1$lkbSignIn"
                 data["__EVENTARGUMENT"] = ""
+
+                log_detail("  B3. 提交登入表單 - 開始")
+                submit_login_start_time = time.time()
                 login_resp = make_request(session, login_url, method='post', headers=headers, data=data)
+                log_detail(f"  B3. 提交登入表單 - 完成 (耗時: {time.time() - submit_login_start_time:.2f}s)")
+
                 if "登出" in login_resp.text or "歡迎" in login_resp.text:
+                    log_detail(f"登入嘗試 {attempt} - 成功 (耗時: {time.time() - login_attempt_start_time:.2f}s)")
+                    login_successful = True
                     break
+                
+                error_msg_detected = ""
                 if "驗證碼" in login_resp.text or "驗證碼錯誤" in login_resp.text or "請輸入驗證碼" in login_resp.text:
-                    continue
-                with open(retry_log_path, 'a', encoding='utf-8') as retry_log:
-                    retry_log.write(f"{name}\n{ACCOUNT}\n{PASSWORD}\n")
-                break
-            else:
-                with open(retry_log_path, 'a', encoding='utf-8') as retry_log:
-                    retry_log.write(f"{name}\n{ACCOUNT}\n{PASSWORD}\n")
-                with open(fail_log_path, 'a', encoding='utf-8') as fail_log:
-                    fail_log.write(f"{name}_{ACCOUNT} 連續{max_login_attempts}次登入失敗\n")
-                raise Exception(f"{name}_{ACCOUNT} 連續{max_login_attempts}次登入失敗")
-            soup = BeautifulSoup(login_resp.text, "html.parser")
+                    error_msg_detected = "驗證碼相關錯誤"
+                else:
+                    error_msg_detected = "其他登入失敗"
+                
+                log_detail(f"登入嘗試 {attempt} - 失敗 ({error_msg_detected}, 本次嘗試耗時: {time.time() - login_attempt_start_time:.2f}s)")
+                if attempt < max_login_attempts:
+                    log_detail("    準備進行下一次登入嘗試...")
+                    time.sleep(retry_delay)
+            
+            if not login_successful:
+                log_detail(f"連續 {actual_login_attempts} 次登入失敗")
+                with open(retry_log_path, 'a', encoding='utf-8') as retry_file:
+                    retry_file.write(f"{name}\n{ACCOUNT}\n{PASSWORD}\n")
+                with open(fail_log_path, 'a', encoding='utf-8') as fail_file:
+                    fail_file.write(f"{name}_{ACCOUNT} 連續{actual_login_attempts}次登入失敗\n")
+                raise Exception(f"{name}_{ACCOUNT} 連續{actual_login_attempts}次登入失敗 (OCR總耗時: {ocr_total_classification_time:.2f}s)")
+
+            log_detail("C1. 請求主頁 - 開始")
+            home_page_start_time = time.time()
             home_url = "https://member.star-rich.net/default"
             home_resp = make_request(session, home_url, headers=headers)
+            log_detail(f"C1. 請求主頁 - 完成 (耗時: {time.time() - home_page_start_time:.2f}s)")
+
+            log_detail("C2. 解析主頁內容 - 開始")
+            parse_home_start_time = time.time()
             home_soup = BeautifulSoup(home_resp.text, "html.parser")
             h4s = home_soup.select(".h4")
             bonus_point = h4s[0].text.strip() if len(h4s) > 0 else ""
@@ -248,87 +335,132 @@ def main_job():
             item2 = h4s[2].text.strip() if len(h4s) > 2 else ""
             item3 = h4s[3].text.strip() if len(h4s) > 3 else ""
             item4 = h4s[4].text.strip() if len(h4s) > 4 else ""
-            star_level = home_soup.select_one("#ctl00_cphPageInner_Label_Pin")
-            star_level = star_level.text.strip() if star_level else ""
+            star_level_tag = home_soup.select_one("#ctl00_cphPageInner_Label_Pin")
+            star_level = star_level_tag.text.strip() if star_level_tag else ""
+            log_detail(f"C2. 解析主頁內容 - 完成 (耗時: {time.time() - parse_home_start_time:.2f}s)")
+
+            log_detail("D1. 請求會員列表頁 - 開始")
+            member_list_start_time = time.time()
             member_url = "https://member.star-rich.net/mem_memlist"
             member_resp = make_request(session, member_url, headers=headers)
+            log_detail(f"D1. 請求會員列表頁 - 完成 (耗時: {time.time() - member_list_start_time:.2f}s)")
+
+            log_detail("D2. 解析會員列表頁 - 開始")
+            parse_member_start_time = time.time()
             member_soup = BeautifulSoup(member_resp.text, "html.parser")
-            left_count = member_soup.select_one("#ctl00_cphPageInner_cphContent_Label_LeftCount")
-            right_count = member_soup.select_one("#ctl00_cphPageInner_cphContent_Label_RightCount")
-            left_count = left_count.text.strip() if left_count else ""
-            right_count = right_count.text.strip() if right_count else ""
+            left_count_tag = member_soup.select_one("#ctl00_cphPageInner_cphContent_Label_LeftCount")
+            right_count_tag = member_soup.select_one("#ctl00_cphPageInner_cphContent_Label_RightCount")
+            left_count = left_count_tag.text.strip() if left_count_tag else ""
+            right_count = right_count_tag.text.strip() if right_count_tag else ""
+            log_detail(f"D2. 解析會員列表頁 - 完成 (耗時: {time.time() - parse_member_start_time:.2f}s)")
+
             extra_data = [bonus_point, item1, item2, item3, item4, star_level, left_count, right_count]
-            url = "https://member.star-rich.net/bonushistory"
-            resp = make_request(session, url, headers=headers)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            viewstate = soup.find("input", {"name": "__VIEWSTATE"})["value"]
-            eventvalidation = soup.find("input", {"name": "__EVENTVALIDATION"})["value"]
-            viewstategen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"]
-            data = {
+
+            log_detail("E1. 請求獎金歷史初始頁 - 開始")
+            bonus_init_start_time = time.time()
+            bonus_history_url = "https://member.star-rich.net/bonushistory"
+            resp_bonus_init = make_request(session, bonus_history_url, headers=headers)
+            log_detail(f"E1. 請求獎金歷史初始頁 - 完成 (耗時: {time.time() - bonus_init_start_time:.2f}s)")
+
+            log_detail("E2. 解析獎金歷史初始頁 - 開始")
+            parse_bonus_init_start_time = time.time()
+            soup_bonus = BeautifulSoup(resp_bonus_init.text, "html.parser")
+            viewstate = soup_bonus.find("input", {"name": "__VIEWSTATE"})["value"]
+            eventvalidation = soup_bonus.find("input", {"name": "__EVENTVALIDATION"})["value"]
+            viewstategen = soup_bonus.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"]
+            log_detail(f"E2. 解析獎金歷史初始頁 - 完成 (耗時: {time.time() - parse_bonus_init_start_time:.2f}s)")
+            
+            form_data_bonus = {
                 "__EVENTTARGET": "ctl00$cphPageInner$cphContent$Button_Enter",
                 "__EVENTARGUMENT": "",
                 "__VIEWSTATE": viewstate,
                 "__VIEWSTATEGENERATOR": viewstategen,
                 "__EVENTVALIDATION": eventvalidation,
-                "ctl00$cphPageInner$cphContent$txtStartDate": "2025/01/01",
-                "ctl00$cphPageInner$cphContent$txtEndDate": "2025/12/31",
+                "ctl00$cphPageInner$cphContent$txtStartDate": start_date,
+                "ctl00$cphPageInner$cphContent$txtEndDate": end_date,
             }
-            response = make_request(session, url, method='post', headers=headers, data=data)
-            soup = BeautifulSoup(response.text, "html.parser")
-            tables = soup.find_all("table")
-            target_table = None
-            for t in tables:
-                ths = [th.get_text(strip=True) for th in t.find_all("th")]
-                if any("獎金" in th for th in ths):
-                    target_table = t
-                    break
-            if target_table is None:
-                return
-            headers_row = [th.get_text(strip=True) for th in target_table.find_all("th")][:-1]
-            headers_row += ["紅利積分", "電子錢包", "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數"]
-            all_rows = []
-            first_page = True
+
+            log_detail("F1. 提交獎金歷史查詢表單 (第一頁) - 開始")
+            bonus_submit_start_time = time.time()
+            response_bonus_page = make_request(session, bonus_history_url, method='post', headers=headers, data=form_data_bonus)
+            log_detail(f"F1. 提交獎金歷史查詢表單 (第一頁) - 完成 (耗時: {time.time() - bonus_submit_start_time:.2f}s)")
+            current_bonus_soup = BeautifulSoup(response_bonus_page.text, "html.parser")
+
+            account_all_rows = []
+            bonus_page_count = 0
+            first_bonus_page_processed = False
             while True:
-                tables = soup.find_all("table")
+                bonus_page_count += 1
+                log_detail(f"  G{bonus_page_count}. 處理獎金歷史第 {bonus_page_count} 頁 - 開始解析")
+                page_parse_start_time = time.time()
+                
+                tables = current_bonus_soup.find_all("table")
                 target_table = None
-                for t in tables:
-                    ths = [th.get_text(strip=True) for th in t.find_all("th")]
-                    if any("獎金" in th for th in ths):
-                        target_table = t
+                for t_table in tables:
+                    ths = [th.get_text(strip=True) for th in t_table.find_all("th")]
+                    if any("獎金" in th_text for th_text in ths):
+                        target_table = t_table
                         break
+                
                 if target_table is None:
+                    log_detail(f"  G{bonus_page_count}. 在第 {bonus_page_count} 頁未找到目標表格，結束獎金歷史處理。")
+                    if bonus_page_count == 1:
+                         log_detail(f"    注意：帳號 {name} 未抓取到任何獎金歷史資料。")
                     break
-                for row in target_table.find_all("tr")[1:]:
-                    cols = [td.get_text(strip=True) for td in row.find_all("td")]
+
+                rows_on_page = 0
+                for row_idx, row_element in enumerate(target_table.find_all("tr")):
+                    if row_idx == 0:
+                        continue
+                    cols = [td.get_text(strip=True) for td in row_element.find_all("td")]
                     if cols:
                         if "總計" in cols[0]:
                             continue
-                        if first_page and len(all_rows) == 0:
-                            all_rows.append(cols[:-1] + extra_data)
+                        rows_on_page +=1
+                        if not first_bonus_page_processed:
+                            account_all_rows.append(cols[:-1] + extra_data)
+                            first_bonus_page_processed = True
                         else:
-                            all_rows.append(cols[:-1] + [""] * len(extra_data))
-                first_page = False
-                viewstate = soup.find("input", {"name": "__VIEWSTATE"})["value"]
-                eventvalidation = soup.find("input", {"name": "__EVENTVALIDATION"})["value"]
-                viewstategen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"]
-                next_btn = soup.find(id="ctl00_cphPageInner_cphContent_hpl_Forward")
+                            account_all_rows.append(cols[:-1] + [""] * len(extra_data))
+                
+                log_detail(f"  G{bonus_page_count}. 處理獎金歷史第 {bonus_page_count} 頁 - 完成解析 (找到 {rows_on_page} 行資料, 耗時: {time.time() - page_parse_start_time:.2f}s)")
+                
+                next_btn = current_bonus_soup.find(id="ctl00_cphPageInner$cphContent$hpl_Forward")
                 if not next_btn or 'disabled' in next_btn.attrs.get('class', []):
+                    log_detail(f"  獎金歷史第 {bonus_page_count} 頁 - 無下一頁按鈕或已禁用，結束分頁。")
                     break
-                data = {
+                
+                log_detail(f"  請求獎金歷史下一頁 (第 {bonus_page_count + 1} 頁) - 開始")
+                next_page_req_start_time = time.time()
+                
+                viewstate = current_bonus_soup.find("input", {"name": "__VIEWSTATE"})["value"]
+                eventvalidation = current_bonus_soup.find("input", {"name": "__EVENTVALIDATION"})["value"]
+                viewstategen = current_bonus_soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"]
+                
+                form_data_bonus_next_page = {
                     "__EVENTTARGET": "ctl00$cphPageInner$cphContent$hpl_Forward",
                     "__EVENTARGUMENT": "",
                     "__VIEWSTATE": viewstate,
                     "__VIEWSTATEGENERATOR": viewstategen,
                     "__EVENTVALIDATION": eventvalidation,
-                    "ctl00$cphPageInner$cphContent$txtStartDate": "2025/01/01",
-                    "ctl00$cphPageInner$cphContent$txtEndDate": "2025/12/31",
+                    "ctl00$cphPageInner$cphContent$txtStartDate": start_date,
+                    "ctl00$cphPageInner$cphContent$txtEndDate": end_date,
                 }
-                response = make_request(session, url, method='post', headers=headers, data=data)
-                soup = BeautifulSoup(response.text, "html.parser")
-            for row in all_rows:
-                row_with_acc = [name, ACCOUNT] + row
-                with all_data_lock:
-                    all_data.append((headers_row, row_with_acc))
+                response_bonus_page = make_request(session, bonus_history_url, method='post', headers=headers, data=form_data_bonus_next_page)
+                log_detail(f"  請求獎金歷史下一頁 (第 {bonus_page_count + 1} 頁) - 完成 (耗時: {time.time() - next_page_req_start_time:.2f}s)")
+                current_bonus_soup = BeautifulSoup(response_bonus_page.text, "html.parser")
+            
+            if not account_all_rows:
+                 log_detail(f"    最終：帳號 {name} 未收集到任何獎金歷史資料列。")
+
+            with all_data_lock:
+                for single_data_row in account_all_rows:
+                    row_to_add_globally = [name, ACCOUNT] + single_data_row
+                    all_data.append(row_to_add_globally)
+                log_detail(f"H1. 已將 {len(account_all_rows)} 行資料添加完成。")
+
+            log_detail(f"處理完成 (總耗時: {time.time() - process_start_time:.2f}s, 其中OCR總耗時: {ocr_total_classification_time:.2f}s)")
+
         total_accounts = len(accounts)
         success_count = 0
         failed_accounts = []
@@ -339,7 +471,7 @@ def main_job():
             started_count = 0
             completed_count = 0
             for idx, (name, ACCOUNT, PASSWORD) in enumerate(accounts, 1):
-                futures.append(executor.submit(fetch_account_data, name, ACCOUNT, PASSWORD))
+                futures.append(executor.submit(fetch_account_data, name, ACCOUNT, PASSWORD, ocr_instance))
                 started_count += 1
                 status["progress"] = f"已提交任務: {started_count}/{total_accounts} (處理中: {completed_count}/{total_accounts})"
                 result_log.append(f"已啟動處理帳號: {started_count}/{total_accounts}")
@@ -365,62 +497,100 @@ def main_job():
         hours = int(total_time // 3600)
         minutes = int((total_time % 3600) // 60)
         seconds = int(total_time % 60)
+
+        excel_file_path_local = None
         if all_data:
-            headers_row = all_data[0][0]
-            all_rows_data = [row_with_acc for _, row_with_acc in all_data]
+            # 定義 Excel 工作表中的欄位標頭 (不包含 "帳號名稱" 和 "登入帳號")
+            # 您需要根據實際從網頁解析的獎金表格欄位來準確定義 bonus_table_actual_headers
+            # 以下為範例，假設獎金表有這些欄位 (通常是 td 的內容)
+            bonus_table_actual_headers = [
+                "日期", "內容", "項目", "變動類型", 
+                "變動前", "變動數", "變動後", "狀態" # 假設這些是您 cols[:-1] 對應的標頭
+            ]
+            extra_data_headers = [
+                "紅利積分", "電子錢包", "獎金暫存", "註冊分", 
+                "商品券", "星級", "左區人數", "右區人數"
+            ]
+            headers_for_excel_sheet = bonus_table_actual_headers + extra_data_headers
+
             folder_name = datetime.now().strftime('%Y%m%d_%H%M')
             output_dir = os.path.join('output', folder_name)
             os.makedirs(output_dir, exist_ok=True)
             wb = Workbook()
             if 'Sheet' in wb.sheetnames:
                 del wb['Sheet']
+            
             acc_dict = defaultdict(list)
-            for row in all_rows_data:
-                acc_key = f"{row[0]}_{row[1]}"
-                acc_dict[acc_key].append(row[2:])
-            for acc_key, rows in acc_dict.items():
+            # 現在 all_data 中的每個元素就是一個包含帳號資訊和數據的列表
+            # row_with_name_acc 的格式是 [name, ACCOUNT, data_col1, data_col2, ...]
+            for row_with_name_acc in all_data:
+                acc_key = f"{row_with_name_acc[0]}_{row_with_name_acc[1]}" # name_ACCOUNT
+                data_part = row_with_name_acc[2:] # 實際要寫入 Excel 的數據行 (去除了 name 和 ACCOUNT)
+                acc_dict[acc_key].append(data_part)
+            
+            for acc_key, data_rows_for_acc in acc_dict.items():
                 ws = wb.create_sheet(acc_key[:31])
-                ws.append(headers_row)
-                for row in rows:
-                    ws.append(row)
-            wb.save(os.path.join(output_dir, 'bonus.xlsx'))
-            # === Dropbox 自動上傳 ===
+                ws.append(headers_for_excel_sheet) # 寫入我們定義的標頭
+                for single_data_row_part in data_rows_for_acc:
+                    ws.append(single_data_row_part)
+            
+            excel_file_path_local = os.path.join(output_dir, 'bonus.xlsx')
+            wb.save(excel_file_path_local)
+
+        final_summary_for_status = []
+        final_summary_for_status.append("=== 處理結果摘要 ===")
+
+        if total_accounts > 0:
+            final_summary_for_status.append(f"帳號處理進度: {completed_count}/{total_accounts} 個帳號已嘗試")
+            final_summary_for_status.append(f"成功擷取資料: {success_count} 個帳號")
+            final_summary_for_status.append(f"登入/處理失敗: {len(failed_accounts)} 個帳號")
+            if failed_accounts:
+                final_summary_for_status.append("失敗帳號列表:")
+                for acc_failure_msg_item in failed_accounts:
+                    final_summary_for_status.append(f"  - {acc_failure_msg_item}")
+        else:
+            final_summary_for_status.append("資訊: 未載入任何帳號進行處理。")
+
+        if all_data and excel_file_path_local:
+            dropbox_status_msg_for_summary = ""
             if dropbox_token:
                 try:
                     dbx = dropbox.Dropbox(dropbox_token)
-                    # 找到 output 目錄下最新的資料夾
-                    output_root = 'output'
-                    subfolders = [os.path.join(output_root, d) for d in os.listdir(output_root) if os.path.isdir(os.path.join(output_root, d))]
-                    if subfolders:
-                        latest_folder = max(subfolders, key=os.path.getmtime)
-                        for fname in os.listdir(latest_folder):
-                            fpath = os.path.join(latest_folder, fname)
-                            if os.path.isfile(fpath):
-                                with open(fpath, 'rb') as f:
-                                    dropbox_path = dropbox_folder.rstrip('/') + '/' + fname
-                                    dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-                        result_log.append(f"✅ 已自動上傳 {latest_folder} 內所有檔案到 Dropbox {dropbox_folder}")
+                    files_to_upload_in_dir = [f_name for f_name in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f_name))]
+                    if files_to_upload_in_dir:
+                        for f_to_upload_name in files_to_upload_in_dir:
+                            path_of_file_to_upload = os.path.join(output_dir, f_to_upload_name)
+                            with open(path_of_file_to_upload, 'rb') as content_f_upload:
+                                dropbox_upload_target_path = dropbox_folder.rstrip('/') + '/' + f_to_upload_name
+                                dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
+                        dropbox_status_msg_for_summary = f"Dropbox狀態: ✅ 檔案已從 {output_dir} 上傳到 {dropbox_folder}"
                     else:
-                        result_log.append("⚠️ 找不到 output 目錄下的任何資料夾，無法上傳 Dropbox")
-                except Exception as e:
-                    result_log.append(f"❌ Dropbox 上傳失敗: {e}")
+                        dropbox_status_msg_for_summary = f"Dropbox狀態: ⚠️ {output_dir} 中無檔案 (Excel可能未儲存成功)，未執行上傳。"
+                except Exception as e_dbx_upload:
+                    dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 上傳失敗 - {str(e_dbx_upload)}"
             else:
-                result_log.append("⚠️ 未設定 Dropbox Token，未執行自動上傳")
-            result_log.append("=== 處理完成總結報告 ===")
-            result_log.append(f"總帳號數量: {total_accounts}")
-            result_log.append(f"成功寫入數量: {success_count}")
-            result_log.append(f"登入失敗數量: {len(failed_accounts)}")
-            if failed_accounts:
-                result_log.append("登入失敗帳號:")
-                for acc in failed_accounts:
-                    result_log.append(f"- {acc}")
-            result_log.append(f"總耗時: {hours}小時 {minutes}分鐘 {seconds}秒")
-            result_log.append(f"資料已寫入: {output_dir}/bonus.xlsx")
-        else:
-            result_log.append("\n沒有任何帳號抓到資料")
-        status["result"] = '\n'.join(result_log)
+                dropbox_status_msg_for_summary = "Dropbox狀態: ⚠️ 未設定Dropbox Token，跳過上傳"
+            
+            final_summary_for_status.append(dropbox_status_msg_for_summary)
+            final_summary_for_status.append(f"輸出檔案: {excel_file_path_local}")
+        
+        elif not all_data and total_accounts > 0 :
+            final_summary_for_status.append("最終結果: 未產生任何資料檔案。")
+
+        final_summary_for_status.append(f"總耗時: {hours}小時 {minutes}分鐘 {seconds}秒")
+        
+        status["result"] = '\\n'.join(final_summary_for_status)
         status["progress"] = f"完成: {completed_count}/{total_accounts} (成功: {success_count})"
-        print("main_job 順利執行完畢")
+
+        console_message_final = "main_job 執行完畢. "
+        if all_data:
+            console_message_final += "資料已產生並嘗試上傳."
+        elif total_accounts > 0:
+            console_message_final += "但未產出任何資料."
+        else:
+            console_message_final += "無帳號可處理."
+        print(console_message_final)
+
     except Exception as e:
         error_message = f"main_job 執行時發生嚴重錯誤: {str(e)}"
         print(error_message)

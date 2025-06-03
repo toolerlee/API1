@@ -36,12 +36,6 @@ def main_job():
     import random
     result_log = []
     try:
-        # 將 progress 的初始化移到 accounts 載入之後，這樣可以正確拿到 len(accounts)
-        # config.txt 讀取等邏輯之後
-        if accounts:
-            status["progress"] = f"準備中 (0/{len(accounts)})"
-        else:
-            status["progress"] = "準備中 (0/0) - 帳號列表為空"
         def get_random_ua():
             uas = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -51,6 +45,7 @@ def main_job():
             ]
             return random.choice(uas)
         DEBUG = False
+
         # 讀取 config.txt 設定
         print("讀取 config.txt ...")
         config = {
@@ -146,7 +141,9 @@ def main_job():
         else:
             account_file = 'account.txt'
             result_log.append(f'[一般模式] 來源: account.txt')
+        
         accounts = []
+
         if os.path.exists(account_file):
             with open(account_file, 'r', encoding='utf-8') as f:
                 lines = [line.strip() for line in f if line.strip()]
@@ -161,6 +158,17 @@ def main_job():
             status["result"] = '\n'.join(result_log)
             status["progress"] = f"錯誤: 找不到 {os.path.basename(account_file)}"
             return '\n'.join(result_log)
+        
+        # --- 在 accounts 列表確定後 (無論是成功載入還是為空)，更新進度 --- 
+        if not accounts and not os.path.exists(account_file): 
+            # 這種情況是 account_file 不存在，上面的 else 已經處理並 return，理論上不會到這裡
+            # 但為了防禦性程式設計，保留一個判斷
+            pass # status["progress"] 已在上面的 else 中設定
+        elif not accounts:
+             status["progress"] = f"準備中 (0/0) - {os.path.basename(account_file)} 為空或格式不正確"
+        else: # accounts 有內容
+            status["progress"] = f"準備中 (0/{len(accounts)})"
+
         all_data = []
         all_data_lock = threading.Lock()
         log_folder = os.path.join('logs', datetime.now().strftime('%Y%m%d_%H%M'))

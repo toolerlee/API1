@@ -38,6 +38,8 @@
         <button onclick="runMainScript()">執行主要腳本</button>
         <button onclick="checkStatus()">檢查狀態</button>
         <div id="message">點擊按鈕以執行操作。</div>
+        <h2>目前進度:</h2>
+        <p id="progressText">尚未開始</p>
         <h2>日誌/結果:</h2>
         <pre id="statusResult"></pre>
     </div>
@@ -45,6 +47,7 @@
     <script>
         const messageDiv = document.getElementById('message');
         const statusResultDiv = document.getElementById('statusResult');
+        const progressTextDiv = document.getElementById('progressText');
 
         async function runMainScript() {
             messageDiv.textContent = '正在請求執行腳本...';
@@ -84,11 +87,17 @@
                 if (response.ok) {
                     messageDiv.textContent = '狀態檢查完成。';
                     messageDiv.className = 'success';
-                    statusResultDiv.textContent = JSON.stringify(data, null, 2);
-                    // 如果仍在運行，可以設置定時器持續檢查
+                    statusResultDiv.textContent = JSON.stringify(data.result !== undefined ? data.result : data, null, 2);
+                    
+                    if (data.progress) {
+                        progressTextDiv.textContent = data.progress;
+                    } else {
+                        progressTextDiv.textContent = data.running ? "處理中..." : "尚未開始或已完成。";
+                    }
+
                     if (data.running) {
                        messageDiv.textContent += ' 腳本仍在運行中...';
-                       setTimeout(checkStatus, 5000); // 每5秒檢查一次
+                       setTimeout(checkStatus, 3000);
                     } else if (data.result) {
                         messageDiv.textContent += ' 腳本執行完畢。';
                     }
@@ -96,12 +105,14 @@
                     messageDiv.textContent = '檢查狀態失敗：' + (data.error || response.statusText);
                     messageDiv.className = 'error';
                     statusResultDiv.textContent = JSON.stringify(data, null, 2);
+                    progressTextDiv.textContent = "無法獲取進度。";
                 }
             } catch (error) {
                 console.error('檢查狀態錯誤:', error);
                 messageDiv.textContent = '檢查狀態時發生錯誤: ' + error.message;
                 messageDiv.className = 'error';
                 statusResultDiv.textContent = '無法獲取狀態。';
+                progressTextDiv.textContent = '無法獲取進度。';
             }
         }
         // 頁面載入時檢查一次狀態

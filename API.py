@@ -7,7 +7,7 @@ print("=== Flask API 啟動 ===")
 
 app = Flask(__name__)
 
-status = {"running": False, "result": None}
+status = {"running": False, "result": None, "progress": "尚未開始"}
 
 # 將原本的主流程包成一個函數
 def main_job():
@@ -35,6 +35,8 @@ def main_job():
     import random
     result_log = []
     try:
+        global status
+        status["progress"] = f"準備中 (0/{len(accounts) if accounts else 'N/A'})"
         def get_random_ua():
             uas = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -109,15 +111,15 @@ def main_job():
                 resp.raise_for_status()
                 return resp.json().get('access_token', '')
             except Exception as e:
-                result_log.append(f"\n❌ Dropbox refresh token 換取 access token 失敗: {e}")
+                result_log.append(f"❌ Dropbox refresh token 換取 access token 失敗: {e}")
                 return ''
         # 若 dropbox_token 為空，則自動 refresh
         if not dropbox_token and dropbox_app_key and dropbox_app_secret and dropbox_refresh_token:
             dropbox_token = get_access_token_from_refresh()
             if dropbox_token:
-                result_log.append("\n✅ 已自動用 refresh token 取得 Dropbox access token")
+                result_log.append("✅ 已自動用 refresh token 取得 Dropbox access token")
             else:
-                result_log.append("\n❌ 無法自動取得 Dropbox access token，請檢查 refresh token 設定")
+                result_log.append("❌ 無法自動取得 Dropbox access token，請檢查 refresh token 設定")
         print(f"API.py 讀到的 dropbox_token: {dropbox_token}")
         # 依 mode 決定帳號來源
         if mode == 1:
@@ -313,14 +315,18 @@ def main_job():
         failed_accounts = []
         start_time = time.time()
         result_log.append(f"\n開始處理，總帳號數量: {total_accounts}")
+        status["progress"] = f"開始處理 (0/{total_accounts})"
         with ThreadPoolExecutor(max_workers=max_concurrent_accounts) as executor:
             futures = []
             started_count = 0
+            completed_count = 0
             for idx, (name, ACCOUNT, PASSWORD) in enumerate(accounts, 1):
                 futures.append(executor.submit(fetch_account_data, name, ACCOUNT, PASSWORD))
                 started_count += 1
+                status["progress"] = f"已提交任務: {started_count}/{total_accounts} (處理中: {completed_count}/{total_accounts})"
                 result_log.append(f"已啟動處理帳號: {started_count}/{total_accounts}")
                 time.sleep(thread_start_delay)
+            
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -332,6 +338,10 @@ def main_job():
                         failed_accounts.append(msg)
                     else:
                         result_log.append(f"[警告] 非帳號登入失敗異常：{msg}")
+                finally:
+                    completed_count += 1
+                    status["progress"] = f"處理中: {completed_count}/{total_accounts} (成功: {success_count})"
+
         end_time = time.time()
         total_time = end_time - start_time
         hours = int(total_time // 3600)
@@ -371,32 +381,34 @@ def main_job():
                                 with open(fpath, 'rb') as f:
                                     dropbox_path = dropbox_folder.rstrip('/') + '/' + fname
                                     dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-                        result_log.append(f"\n✅ 已自動上傳 {latest_folder} 內所有檔案到 Dropbox {dropbox_folder}")
+                        result_log.append(f"✅ 已自動上傳 {latest_folder} 內所有檔案到 Dropbox {dropbox_folder}")
                     else:
-                        result_log.append("\n⚠️ 找不到 output 目錄下的任何資料夾，無法上傳 Dropbox")
+                        result_log.append("⚠️ 找不到 output 目錄下的任何資料夾，無法上傳 Dropbox")
                 except Exception as e:
-                    result_log.append(f"\n❌ Dropbox 上傳失敗: {e}")
+                    result_log.append(f"❌ Dropbox 上傳失敗: {e}")
             else:
-                result_log.append("\n⚠️ 未設定 Dropbox Token，未執行自動上傳")
-            result_log.append("\n\n=== 處理完成總結報告 ===")
+                result_log.append("⚠️ 未設定 Dropbox Token，未執行自動上傳")
+            result_log.append("=== 處理完成總結報告 ===")
             result_log.append(f"總帳號數量: {total_accounts}")
             result_log.append(f"成功寫入數量: {success_count}")
             result_log.append(f"登入失敗數量: {len(failed_accounts)}")
             if failed_accounts:
-                result_log.append("\n登入失敗帳號:")
+                result_log.append("登入失敗帳號:")
                 for acc in failed_accounts:
                     result_log.append(f"- {acc}")
-            result_log.append(f"\n總耗時: {hours}小時 {minutes}分鐘 {seconds}秒")
+            result_log.append(f"總耗時: {hours}小時 {minutes}分鐘 {seconds}秒")
             result_log.append(f"資料已寫入: {output_dir}/bonus.xlsx")
         else:
             result_log.append("\n沒有任何帳號抓到資料")
         status["result"] = '\n'.join(result_log)
+        status["progress"] = f"完成: {completed_count}/{total_accounts} (成功: {success_count})"
         print("main_job 順利執行完畢")
     except Exception as e:
         error_message = f"main_job 執行時發生嚴重錯誤: {str(e)}"
         print(error_message)
         result_log.append(error_message)
         status["result"] = '\n'.join(result_log)
+        status["progress"] = "發生錯誤，請查看日誌"
     finally:
         status["running"] = False
         print("main_job 執行緒結束 (無論成功或失敗)")
@@ -412,6 +424,7 @@ def run_main():
     
     status["running"] = True
     status["result"] = "初始化中，準備開始執行主要腳本..."
+    status["progress"] = "初始化中..."
     
     print("準備啟動新 thread 執行 main_job")
     thread = threading.Thread(target=main_job)

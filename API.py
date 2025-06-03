@@ -14,6 +14,7 @@ def main_job():
     global status
     status["running"] = True
     status["result"] = "處理中...請稍候..."
+    status["progress"] = "初始化中..."
     print("=== main_job 啟動 ===")
     import os
     import json
@@ -35,8 +36,12 @@ def main_job():
     import random
     result_log = []
     try:
-        global status
-        status["progress"] = f"準備中 (0/{len(accounts) if accounts else 'N/A'})"
+        # 將 progress 的初始化移到 accounts 載入之後，這樣可以正確拿到 len(accounts)
+        # config.txt 讀取等邏輯之後
+        if accounts:
+            status["progress"] = f"準備中 (0/{len(accounts)})"
+        else:
+            status["progress"] = "準備中 (0/0) - 帳號列表為空"
         def get_random_ua():
             uas = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -126,11 +131,15 @@ def main_job():
             log_dirs = [d for d in glob.glob(os.path.join('logs', '*')) if os.path.isdir(d)]
             if not log_dirs:
                 result_log.append('❌ [重試模式] 找不到 logs 目錄下的任何執行資料夾，無法進行重試。')
+                status["result"] = '\n'.join(result_log)
+                status["progress"] = "錯誤: 找不到logs資料夾"
                 return '\n'.join(result_log)
             latest_log_dir = max(log_dirs, key=os.path.getmtime)
             retry_file = os.path.join(latest_log_dir, 'retry.txt')
             if not os.path.exists(retry_file):
                 result_log.append(f'❌ [重試模式] 找不到 {retry_file}，無法進行重試。')
+                status["result"] = '\n'.join(result_log)
+                status["progress"] = f"錯誤: 找不到 {os.path.basename(retry_file)}"
                 return '\n'.join(result_log)
             account_file = retry_file
             result_log.append(f'[重試模式] 來源: {retry_file}')
@@ -149,6 +158,8 @@ def main_job():
                         accounts.append((name, account, password))
         else:
             result_log.append(f'找不到 {account_file}，請建立並填入帳號資料。')
+            status["result"] = '\n'.join(result_log)
+            status["progress"] = f"錯誤: 找不到 {os.path.basename(account_file)}"
             return '\n'.join(result_log)
         all_data = []
         all_data_lock = threading.Lock()
@@ -315,7 +326,6 @@ def main_job():
         failed_accounts = []
         start_time = time.time()
         result_log.append(f"\n開始處理，總帳號數量: {total_accounts}")
-        status["progress"] = f"開始處理 (0/{total_accounts})"
         with ThreadPoolExecutor(max_workers=max_concurrent_accounts) as executor:
             futures = []
             started_count = 0

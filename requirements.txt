@@ -6,3 +6,4 @@ openpyxl
 pandas
 beautifulsoup4
 pillow
+gunicorn

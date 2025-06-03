@@ -2,7 +2,7 @@
 mode=0  # 0=一般模式, 1=重試模式
 
 # 並發處理設定
-max_concurrent_accounts=10  # 同時處理的帳號數量
+max_concurrent_accounts=1  # 同時處理的帳號數量
 thread_start_delay=1.0  # 線程啟動延遲(秒)
 
 # 登入重試設定

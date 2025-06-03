@@ -2,16 +2,16 @@
 mode=0  # 0=一般模式, 1=重試模式
 
 # 並發處理設定
-max_concurrent_accounts=30  # 同時處理的帳號數量
-thread_start_delay=0.5  # 線程啟動延遲(秒)
+max_concurrent_accounts=10  # 同時處理的帳號數量
+thread_start_delay=1.0  # 線程啟動延遲(秒)
 
 # 登入重試設定
 max_login_attempts=3  # 登入重試次數
 
 # 請求間隔設定
-request_delay=2.0  # 每次請求之間的延遲時間(秒)
+request_delay=3.0  # 每次請求之間的延遲時間(秒)
 max_request_retries=3  # 請求失敗時的最大重試次數
-retry_delay=3.0  # 重試之間的延遲時間(秒)
+retry_delay=5.0  # 重試之間的延遲時間(秒)
 
 # 日期設定
 start_date=2025/01/01  # 開始日期

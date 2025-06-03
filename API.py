@@ -421,6 +421,7 @@ def run_main():
 
 @app.route('/status', methods=['GET'])
 def get_status():
+    print(f"[STATUS_ENDPOINT] 目前的 status 字典是: {status}")
     return jsonify(status)
 
 @app.route('/')

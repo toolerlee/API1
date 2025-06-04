@@ -2,6 +2,10 @@ from flask import Flask, request, jsonify, send_from_directory
 import threading
 import dropbox
 import os
+import re
+from copy import copy
+from openpyxl.styles import Alignment, Font, Border, Side, Color
+from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
 
 print("=== Flask API 啟動 ===")
 
@@ -34,6 +38,9 @@ def main_job():
     import glob
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import random
+    from copy import copy
+    from openpyxl.styles import Alignment, Font, Border, Side, Color
+    from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
 
     # 初始化 OCR 實例 (在所有 import 之後，config 讀取之前或之後均可，但在 ThreadPoolExecutor 之前)
     # 使用 show_ad=False 可以避免一些不必要的日誌或行為
@@ -50,6 +57,384 @@ def main_job():
 
     result_log = []
     try:
+        # --- Start of functions copied and adapted from Auto.py ---
+        
+        # Color map (moved here to be accessible by helper functions)
+        # Defined outside helper functions but within main_job's try block
+        # to be accessible by _internal_generate_bonus2_report
+        global_color_map_for_reports = {
+            "紅利積分": "FF0000", # 紅色
+            "電子錢包": "00008B", # 深藍
+            "獎金暫存": "8B4513", # 鞍棕色
+            "註冊分": "FF8C00",   # 深橙色
+            "商品券": "2F4F4F",   # 暗灰綠色
+            "星級": "708090"     # 石板灰
+        }
+        global_thin_border_for_reports = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+
+        def is_number_value(value): # Renamed from is_number to avoid conflict
+            if value is None:
+                return False
+            try:
+                float(str(value).replace(',', ''))
+                return True
+            except (ValueError, TypeError):
+                return False
+
+        def apply_formatting_to_cell(cell, bold=False, font_color_hex=None, border=None, alignment_horizontal='center', alignment_vertical='center'):
+            """Applies various formatting options to a cell."""
+            if border:
+                cell.border = border
+            cell.alignment = Alignment(horizontal=alignment_horizontal, vertical=alignment_vertical)
+            
+            # Preserve existing font properties if possible, or create new Font object
+            current_font = cell.font if cell.has_style and cell.font else Font()
+            
+            new_font_attributes = {
+                'name': current_font.name,
+                'sz': current_font.sz if current_font.sz else 11, # Default size if none
+                'b': bold if bold is not None else current_font.b,
+                'i': current_font.i,
+                'vertAlign': current_font.vertAlign,
+                'underline': current_font.underline,
+                'strike': current_font.strike,
+            }
+            if font_color_hex:
+                # Make sure Color object is used for font color
+                new_font_attributes['color'] = Color(rgb=font_color_hex)
+            elif current_font.color: # Preserve existing color if no new one is specified
+                 new_font_attributes['color'] = current_font.color
+
+
+            cell.font = Font(**new_font_attributes)
+
+
+        def copy_cell_format_for_api(source_cell, target_cell): # Renamed
+            if source_cell.has_style:
+                target_cell.font = copy(source_cell.font)
+                target_cell.border = copy(source_cell.border)
+                target_cell.fill = copy(source_cell.fill)
+                target_cell.number_format = source_cell.number_format
+                target_cell.protection = copy(source_cell.protection)
+                target_cell.alignment = copy(source_cell.alignment)
+
+        def sort_sheets_by_gold_level_in_api(sheet_names_list, workbook_source): # Renamed
+            def get_sheet_order_key(sheet_name_str):
+                ws = workbook_source[sheet_name_str]
+                star_level_val = ws['V2'].value # In API.py, this is column V (index 21), header "星級"
+                # Column V in bonus.xlsx (created by API.py) corresponds to '星級'
+                # It's the 6th element in extra_data_headers, which means it's at index (bonus_table_cols + 5)
+                # If bonus_table_actual_headers has 8 cols, it's 8+5 = 13.
+                # With "帳號名稱", "登入帳號" at the start, then 8 bonus_table_cols, then 8 extra_data_cols
+                # "星級" is the 2+8+5 = 15th column (0-indexed) if looking at raw all_data.
+                # In the per-sheet excel, "星級" is at column V (22nd letter, index 21)
+                # V2 is the correct cell for star_level in bonus.xlsx sheets.
+                return 1 if star_level_val and "金級" in str(star_level_val) else 0
+            return sorted(sheet_names_list, key=get_sheet_order_key)
+
+        def _internal_generate_bonus2_report(source_bonus_xlsx_path, output_bonus2_xlsx_path):
+            result_log.append(f"內部函數：開始生成 Bonus2.xlsx 從 {source_bonus_xlsx_path}")
+            try:
+                if not os.path.exists(source_bonus_xlsx_path):
+                    result_log.append(f"❌ 錯誤: 來源 bonus.xlsx '{source_bonus_xlsx_path}' 不存在。")
+                    return False
+
+                wb_source = openpyxl.load_workbook(source_bonus_xlsx_path, data_only=True)
+                wb_target = openpyxl.Workbook()
+                if 'Sheet' in wb_target.sheetnames: # Remove default sheet
+                     wb_target.remove(wb_target.active)
+
+                person_sheets_map = defaultdict(list)
+                for sheet_name_from_bonus in wb_source.sheetnames:
+                    name_raw_part = sheet_name_from_bonus.split("_")[0]
+                    # Remove digits to group by person's name part only
+                    person_identifier = re.sub(r'\d+', '', name_raw_part)
+                    person_sheets_map[person_identifier].append(sheet_name_from_bonus)
+                
+                result_log.append(f"資訊: 識別出 {len(person_sheets_map)} 個獨立的 person_identifier 用於 Bonus2.xlsx 的工作表。")
+
+                # --- Date Alignment Logic ---
+                all_dates_globally = set()
+                for _, source_sheet_names in person_sheets_map.items():
+                    for s_name in source_sheet_names:
+                        ws_s = wb_source[s_name]
+                        # Dates are in column A ("獎金周期") starting from row 2 in bonus.xlsx
+                        # headers_for_excel_sheet[0] is "獎金周期"
+                        dates_in_sheet = [row[0] for row in ws_s.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True) if row[0] is not None]
+                        all_dates_globally.update(dates_in_sheet)
+                
+                sorted_all_dates_desc = sorted(list(all_dates_globally), reverse=True) # Newest dates on top
+
+                for person_id, source_sheet_names_for_person in person_sheets_map.items():
+                    if not source_sheet_names_for_person:
+                        result_log.append(f"警告: person_id '{person_id}' 沒有關聯的原始工作表，跳過。")
+                        continue
+
+                    sorted_source_sheets_for_person = sort_sheets_by_gold_level_in_api(source_sheet_names_for_person, wb_source)
+                    
+                    ws_target = wb_target.create_sheet(title=person_id[:31]) # Sheet title length limit
+                    result_log.append(f"  為 '{person_id}' 創建工作表 '{ws_target.title}'")
+
+                    # --- Header Section (Rows 1-10) ---
+                    # Row 1: Person ID and Name for each account
+                    ws_target['A1'] = "名稱" # Static title for column A, row 1
+                    apply_formatting_to_cell(ws_target['A1'], bold=True, border=global_thin_border_for_reports)
+                    
+                    for col_idx_acc, sheet_name_src in enumerate(sorted_source_sheets_for_person):
+                        name_part = sheet_name_src.split('_')[0]
+                        target_cell_name = ws_target.cell(row=1, column=2 + col_idx_acc, value=name_part)
+                        apply_formatting_to_cell(target_cell_name, bold=True, border=global_thin_border_for_reports)
+
+                    # Rows 2-7: Q, R, S, T, U, V column headers from bonus.xlsx (col 17-22) and their values
+                    # Headers in bonus.xlsx are: "紅利積分", "電子錢包", "獎金暫存", "註冊分", "商品券", "星級"
+                    # These are the 17th to 22nd headers in headers_for_excel_sheet
+                    # (indices 16 to 21)
+                    
+                    # Titles for rows 2-7 in Column A of Bonus2
+                    titles_for_a2_a7 = ["紅利積分", "電子錢包", "獎金暫存", "註冊分", "商品券", "星級"]
+                    # Corresponding column letters in source bonus.xlsx sheets (Q to V)
+                    source_col_letters_for_a2_a7_data = ['Q', 'R', 'S', 'T', 'U', 'V']
+
+                    for row_offset, title_a_col in enumerate(titles_for_a2_a7):
+                        current_row_bonus2 = 2 + row_offset
+                        cell_a_title = ws_target.cell(row=current_row_bonus2, column=1, value=title_a_col)
+                        font_clr = global_color_map_for_reports.get(title_a_col)
+                        apply_formatting_to_cell(cell_a_title, bold=True, font_color_hex=font_clr, border=global_thin_border_for_reports)
+
+                        # Populate data for these rows from each source sheet
+                        first_source_sheet_name_for_person = sorted_source_sheets_for_person[0]
+                        ws_first_src = wb_source[first_source_sheet_name_for_person]
+
+                        for acc_col_idx, sheet_name_src in enumerate(sorted_source_sheets_for_person):
+                            ws_src_current_acc = wb_source[sheet_name_src]
+                            # Data is in row 2 (e.g., Q2, R2, etc.) of source sheets
+                            source_cell_value = ws_src_current_acc[f'{source_col_letters_for_a2_a7_data[row_offset]}2'].value
+                            
+                            target_data_cell = ws_target.cell(row=current_row_bonus2, column=2 + acc_col_idx)
+                            if is_number_value(source_cell_value):
+                                target_data_cell.value = float(str(source_cell_value).replace(',', ''))
+                                target_data_cell.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                            else:
+                                target_data_cell.value = source_cell_value
+                            apply_formatting_to_cell(target_data_cell, bold=True, font_color_hex=font_clr, border=global_thin_border_for_reports)
+
+                    # Row 8: Account Numbers
+                    ws_target['A8'] = "帳號"
+                    apply_formatting_to_cell(ws_target['A8'], bold=True, border=global_thin_border_for_reports)
+                    for col_idx_acc, sheet_name_src in enumerate(sorted_source_sheets_for_person):
+                        acc_num_part = sheet_name_src.split('_', 1)[-1] if '_' in sheet_name_src else sheet_name_src
+                        target_cell_acc_num = ws_target.cell(row=8, column=2 + col_idx_acc, value=acc_num_part)
+                        apply_formatting_to_cell(target_cell_acc_num, border=global_thin_border_for_reports)
+                    
+                    # Row 9: Left/Right Counts ("左右人數")
+                    # Data from W2 and X2 in source sheets ("左區人數", "右區人數")
+                    ws_target['A9'] = "左右人數"
+                    apply_formatting_to_cell(ws_target['A9'], bold=True, font_color_hex="006400", border=global_thin_border_for_reports) # DarkGreen
+                    for col_idx_acc, sheet_name_src in enumerate(sorted_source_sheets_for_person):
+                        ws_src_current_acc = wb_source[sheet_name_src]
+                        left_count_val = ws_src_current_acc['W2'].value # W corresponds to "左區人數"
+                        right_count_val = ws_src_current_acc['X2'].value # X corresponds to "右區人數"
+                        lr_text = f"{left_count_val or 0} <> {right_count_val or 0}"
+                        target_cell_lr = ws_target.cell(row=9, column=2 + col_idx_acc, value=lr_text)
+                        apply_formatting_to_cell(target_cell_lr, font_color_hex="006400", border=global_thin_border_for_reports)
+
+                    # Row 10: "總計" (This will now be calculated as sum of daily M-column values from rows 11+)
+                    ws_target['A10'] = "總計"
+                    apply_formatting_to_cell(ws_target['A10'], bold=True, font_color_hex="8B008B", border=global_thin_border_for_reports) # DarkMagenta
+                    
+                    # --- Data Section (Rows 11 onwards) ---
+                    # Column A: Sorted unique dates
+                    for date_row_idx, date_val in enumerate(sorted_all_dates_desc):
+                        cell_date = ws_target.cell(row=11 + date_row_idx, column=1, value=date_val)
+                        if isinstance(date_val, datetime):
+                            cell_date.number_format = 'YYYY/MM/DD'
+                        apply_formatting_to_cell(cell_date, border=global_thin_border_for_reports)
+
+                    # Data columns: Values from "其他減項" (Column M) of source sheets, aligned by date
+                    for acc_col_idx, sheet_name_src in enumerate(sorted_source_sheets_for_person):
+                        ws_src_current_acc = wb_source[sheet_name_src]
+                        date_to_m_column_value_map = {} 
+                        for src_row_data in ws_src_current_acc.iter_rows(min_row=2, max_col=13, values_only=True):
+                            date_in_src_row = src_row_data[0]
+                            m_column_value_in_src_row = src_row_data[12] if len(src_row_data) > 12 else None
+                            if date_in_src_row is not None:
+                                date_to_m_column_value_map[date_in_src_row] = m_column_value_in_src_row
+                        
+                        sum_for_this_account_col_10 = 0 # Initialize sum for current account's Row 10 total
+                        for date_row_idx, date_val_target in enumerate(sorted_all_dates_desc):
+                            value_for_date = date_to_m_column_value_map.get(date_val_target)
+                            data_cell = ws_target.cell(row=11 + date_row_idx, column=2 + acc_col_idx)
+                            if is_number_value(value_for_date):
+                                numeric_value = float(str(value_for_date).replace(',', ''))
+                                data_cell.value = numeric_value
+                                data_cell.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                                sum_for_this_account_col_10 += numeric_value # Add to Row 10 sum
+                            else:
+                                data_cell.value = value_for_date 
+                            apply_formatting_to_cell(data_cell, border=global_thin_border_for_reports)
+                        
+                        # Now, populate the calculated sum into Row 10 for this account column
+                        target_cell_total_r10_calculated = ws_target.cell(row=10, column=2 + acc_col_idx)
+                        target_cell_total_r10_calculated.value = sum_for_this_account_col_10
+                        target_cell_total_r10_calculated.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                        apply_formatting_to_cell(target_cell_total_r10_calculated, bold=True, font_color_hex="8B008B", border=global_thin_border_for_reports)
+                        
+                    # --- Summary Columns (USD Total, TWD Total) ---
+                    num_data_cols_for_person = len(sorted_source_sheets_for_person)
+                    usd_total_col_bonus2 = 2 + num_data_cols_for_person
+                    twd_total_col_bonus2 = usd_total_col_bonus2 + 1
+
+                    # Headers for summary columns
+                    ws_target.cell(row=9, column=usd_total_col_bonus2, value="美元收入").font = Font(color="8B008B", bold=True)
+                    apply_formatting_to_cell(ws_target.cell(row=9, column=usd_total_col_bonus2), border=global_thin_border_for_reports)
+                    ws_target.cell(row=9, column=twd_total_col_bonus2, value="台幣收入").font = Font(color="0000FF", bold=True)
+                    apply_formatting_to_cell(ws_target.cell(row=9, column=twd_total_col_bonus2), border=global_thin_border_for_reports)
+                    
+                    # Calculate and fill summary rows (Row 10 and date rows 11+)
+                    # Row 10 (Overall Total)
+                    sum_usd_row10 = sum(
+                        ws_target.cell(row=10, column=2 + i).value or 0
+                        for i in range(num_data_cols_for_person)
+                        if is_number_value(ws_target.cell(row=10, column=2+i).value) # Corrected index for value check
+                    )
+                    cell_usd_total_r10 = ws_target.cell(row=10, column=usd_total_col_bonus2, value=sum_usd_row10)
+                    cell_usd_total_r10.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                    apply_formatting_to_cell(cell_usd_total_r10, bold=True, font_color_hex="8B008B", border=global_thin_border_for_reports)
+                    
+                    twd_val_r10 = sum_usd_row10 * 33 # Assuming exchange rate
+                    cell_twd_total_r10 = ws_target.cell(row=10, column=twd_total_col_bonus2, value=twd_val_r10)
+                    cell_twd_total_r10.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                    apply_formatting_to_cell(cell_twd_total_r10, bold=True, font_color_hex="0000FF", border=global_thin_border_for_reports)
+
+                    # Date rows (11 onwards)
+                    for date_row_idx_calc in range(len(sorted_all_dates_desc)):
+                        current_data_row_bonus2 = 11 + date_row_idx_calc
+                        sum_usd_for_date_row = sum(
+                            ws_target.cell(row=current_data_row_bonus2, column=2 + i).value or 0
+                            for i in range(num_data_cols_for_person)
+                            if is_number_value(ws_target.cell(row=current_data_row_bonus2, column=2 + i).value)
+                        )
+                        cell_usd_date_row = ws_target.cell(row=current_data_row_bonus2, column=usd_total_col_bonus2, value=sum_usd_for_date_row)
+                        cell_usd_date_row.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                        apply_formatting_to_cell(cell_usd_date_row, font_color_hex="8B008B", border=global_thin_border_for_reports)
+
+                        twd_val_for_date_row = sum_usd_for_date_row * 33
+                        cell_twd_date_row = ws_target.cell(row=current_data_row_bonus2, column=twd_total_col_bonus2, value=twd_val_for_date_row)
+                        cell_twd_date_row.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                        apply_formatting_to_cell(cell_twd_date_row, font_color_hex="0000FF", border=global_thin_border_for_reports)
+
+                    # Summary for "電子錢包" (Row 3) and "獎金暫存" (Row 4) totals
+                    # "電子錢包" is on row 3 of Bonus2
+                    sum_electronic_wallet = sum(
+                        ws_target.cell(row=3, column=2 + i).value or 0
+                        for i in range(num_data_cols_for_person)
+                        if is_number_value(ws_target.cell(row=3, column=2 + i).value)
+                    )
+                    cell_sum_ew = ws_target.cell(row=3, column=usd_total_col_bonus2, value=sum_electronic_wallet)
+                    cell_sum_ew.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                    apply_formatting_to_cell(cell_sum_ew, bold=True, font_color_hex=global_color_map_for_reports.get("電子錢包"), border=global_thin_border_for_reports)
+                    ws_target.cell(row=3, column=twd_total_col_bonus2, value="←電子錢包總和").font = Font(color=global_color_map_for_reports.get("電子錢包"), bold=True)
+                    apply_formatting_to_cell(ws_target.cell(row=3, column=twd_total_col_bonus2), border=global_thin_border_for_reports, alignment_horizontal='left')
+
+
+                    # "獎金暫存" is on row 4 of Bonus2
+                    sum_bonus_storage = sum(
+                        ws_target.cell(row=4, column=2 + i).value or 0
+                        for i in range(num_data_cols_for_person)
+                        if is_number_value(ws_target.cell(row=4, column=2 + i).value)
+                    )
+                    cell_sum_bs = ws_target.cell(row=4, column=usd_total_col_bonus2, value=sum_bonus_storage)
+                    cell_sum_bs.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
+                    apply_formatting_to_cell(cell_sum_bs, bold=True, font_color_hex=global_color_map_for_reports.get("獎金暫存"), border=global_thin_border_for_reports)
+                    ws_target.cell(row=4, column=twd_total_col_bonus2, value="←獎金暫存總和").font = Font(color=global_color_map_for_reports.get("獎金暫存"), bold=True)
+                    apply_formatting_to_cell(ws_target.cell(row=4, column=twd_total_col_bonus2), border=global_thin_border_for_reports, alignment_horizontal='left')
+
+
+                    # --- Column Widths ---
+                    ws_target.column_dimensions['A'].width = 12
+                    for i in range(num_data_cols_for_person):
+                        col_letter = openpyxl.utils.get_column_letter(2 + i)
+                        ws_target.column_dimensions[col_letter].width = 15 # Increased width for account data
+                    ws_target.column_dimensions[openpyxl.utils.get_column_letter(usd_total_col_bonus2)].width = 15
+                    ws_target.column_dimensions[openpyxl.utils.get_column_letter(twd_total_col_bonus2)].width = 15
+                
+                wb_target.save(output_bonus2_xlsx_path)
+                result_log.append(f"✅ Bonus2.xlsx 已成功生成並儲存於 {output_bonus2_xlsx_path}")
+                return True
+            except Exception as e_gen_b2:
+                result_log.append(f"❌ 生成 Bonus2.xlsx 時發生錯誤: {str(e_gen_b2)}")
+                print(f"PYTHON_ERROR in _internal_generate_bonus2_report: {e_gen_b2}") # for console log
+                import traceback
+                traceback.print_exc()
+                return False
+
+        def _internal_split_bonus2_sheets(bonus2_xlsx_path, output_directory_for_split_files):
+            result_log.append(f"內部函數：開始分割 Bonus2.xlsx 從 {bonus2_xlsx_path} 到目錄 {output_directory_for_split_files}")
+            split_files_generated_paths = []
+            try:
+                if not os.path.exists(bonus2_xlsx_path):
+                    result_log.append(f"❌ 錯誤: Bonus2.xlsx '{bonus2_xlsx_path}' 不存在，無法分割。")
+                    return [] # Return empty list on failure
+
+                workbook_to_split = openpyxl.load_workbook(bonus2_xlsx_path)
+                date_str_prefix = datetime.now().strftime("%Y%m%d")
+
+                if not os.path.exists(output_directory_for_split_files):
+                    os.makedirs(output_directory_for_split_files, exist_ok=True)
+                    result_log.append(f"資訊: 已創建用於存放分割檔案的目錄: {output_directory_for_split_files}")
+
+                for sheet_name_to_split in workbook_to_split.sheetnames:
+                    new_wb_for_sheet = openpyxl.Workbook()
+                    # Remove default sheet if it exists (it usually does)
+                    if new_wb_for_sheet.sheetnames[0] == 'Sheet':
+                         new_wb_for_sheet.remove(new_wb_for_sheet.active)
+                    
+                    source_sheet_obj = workbook_to_split[sheet_name_to_split]
+                    # Create new sheet in the new workbook with the same title
+                    target_sheet_in_new_wb = new_wb_for_sheet.create_sheet(title=sheet_name_to_split)
+
+                    # Copy column dimensions
+                    for col_letter, dim in source_sheet_obj.column_dimensions.items():
+                        target_sheet_in_new_wb.column_dimensions[col_letter].width = dim.width
+                        if dim.bestFit: target_sheet_in_new_wb.column_dimensions[col_letter].bestFit = dim.bestFit
+                        if dim.collapsed: target_sheet_in_new_wb.column_dimensions[col_letter].collapsed = dim.collapsed
+                        # ... copy other dimension properties as needed
+
+                    # Copy row dimensions
+                    for row_idx, dim in source_sheet_obj.row_dimensions.items():
+                        target_sheet_in_new_wb.row_dimensions[row_idx].height = dim.height
+                        # ... copy other dimension properties
+
+                    # Copy cell values and styles
+                    for row in source_sheet_obj.iter_rows():
+                        for cell in row:
+                            new_cell = target_sheet_in_new_wb[cell.coordinate]
+                            new_cell.value = cell.value
+                            if cell.has_style:
+                                copy_cell_format_for_api(cell, new_cell) # Use the renamed copy_cell_format
+
+                    split_filename = f"{date_str_prefix}{sheet_name_to_split}.xlsx"
+                    full_split_filepath = os.path.join(output_directory_for_split_files, split_filename)
+                    new_wb_for_sheet.save(full_split_filepath)
+                    split_files_generated_paths.append(full_split_filepath)
+                    result_log.append(f"  已生成分割檔案: {full_split_filepath}")
+                
+                result_log.append(f"✅ Bonus2.xlsx 已成功按工作表分割。共生成 {len(split_files_generated_paths)} 個檔案。")
+                return split_files_generated_paths
+            except Exception as e_split_b2:
+                result_log.append(f"❌ 分割 Bonus2.xlsx 時發生錯誤: {str(e_split_b2)}")
+                print(f"PYTHON_ERROR in _internal_split_bonus2_sheets: {e_split_b2}") # for console log
+                import traceback
+                traceback.print_exc()
+                return [] # Return empty list on failure
+
+        # --- End of functions copied and adapted from Auto.py ---
+
         def get_random_ua():
             uas = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -499,19 +884,16 @@ def main_job():
         seconds = int(total_time % 60)
 
         excel_file_path_local = None
+        bonus2_file_path_local = None # For Bonus2.xlsx
+        split_excel_files_paths = [] # For split files
+
         if all_data:
-            # 定義 Excel 工作表中的欄位標頭 (不包含 "帳號名稱" 和 "登入帳號")
-            # 您需要根據實際從網頁解析的獎金表格欄位來準確定義 bonus_table_actual_headers
-            # 以下為範例，假設獎金表有這些欄位 (通常是 td 的內容)
-            bonus_table_actual_headers = [
-                "日期", "內容", "項目", "變動類型", 
-                "變動前", "變動數", "變動後", "狀態" # 假設這些是您 cols[:-1] 對應的標頭
+            headers_for_excel_sheet = [
+                "獎金周期", "獎金周期", "消費對等", "經營分紅", "安置獎金", "推薦獎金",
+                "消費分紅", "經營對等", "收件中心", "新增加權", "小計", "其他加項",
+                "其他減項", "稅額", "補充費", "總計", "紅利積分", "電子錢包",
+                "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數"
             ]
-            extra_data_headers = [
-                "紅利積分", "電子錢包", "獎金暫存", "註冊分", 
-                "商品券", "星級", "左區人數", "右區人數"
-            ]
-            headers_for_excel_sheet = bonus_table_actual_headers + extra_data_headers
 
             folder_name = datetime.now().strftime('%Y%m%d_%H%M')
             output_dir = os.path.join('output', folder_name)
@@ -536,6 +918,30 @@ def main_job():
             
             excel_file_path_local = os.path.join(output_dir, 'bonus.xlsx')
             wb.save(excel_file_path_local)
+            result_log.append(f"主要 bonus.xlsx 已儲存於: {excel_file_path_local}") # Log main bonus.xlsx save
+
+            # --- Generate Bonus2.xlsx and Split files ---
+            if excel_file_path_local and os.path.exists(excel_file_path_local):
+                bonus2_filename = 'Bonus2.xlsx'
+                bonus2_file_path_local = os.path.join(output_dir, bonus2_filename)
+                
+                generation_successful = _internal_generate_bonus2_report(excel_file_path_local, bonus2_file_path_local)
+                
+                if generation_successful and os.path.exists(bonus2_file_path_local):
+                    result_log.append(f"Bonus2.xlsx 已成功生成於: {bonus2_file_path_local}")
+                    # Now split Bonus2.xlsx. Split files will be in the same output_dir.
+                    split_excel_files_paths = _internal_split_bonus2_sheets(bonus2_file_path_local, output_dir)
+                    if split_excel_files_paths:
+                        result_log.append(f"Bonus2.xlsx 已成功分割成 {len(split_excel_files_paths)} 個檔案。")
+                    else:
+                        result_log.append("警告: Bonus2.xlsx 分割未產生任何檔案或發生錯誤。")
+                else:
+                    result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成於 {bonus2_file_path_local}。跳過分割。")
+                    bonus2_file_path_local = None # Ensure it's None if not generated
+            else:
+                result_log.append("錯誤: 主要 bonus.xlsx 不存在，無法生成 Bonus2.xlsx。")
+            # --- End of Bonus2 and Split ---
+
 
         final_summary_for_status = []
         final_summary_for_status.append("=== 處理結果摘要 ===")
@@ -551,30 +957,65 @@ def main_job():
         else:
             final_summary_for_status.append("資訊: 未載入任何帳號進行處理。")
 
-        if all_data and excel_file_path_local:
+        # --- Update summary for file generation and Dropbox upload ---
+        if excel_file_path_local or bonus2_file_path_local or split_excel_files_paths:
+            files_generated_summary = []
+            if excel_file_path_local and os.path.exists(excel_file_path_local):
+                files_generated_summary.append(f"  - 主要報表: {os.path.basename(excel_file_path_local)}")
+            if bonus2_file_path_local and os.path.exists(bonus2_file_path_local):
+                files_generated_summary.append(f"  - 詳細總結報表: {os.path.basename(bonus2_file_path_local)}")
+            if split_excel_files_paths:
+                files_generated_summary.append(f"  - 分割報表: {len(split_excel_files_paths)} 個檔案 (如 {os.path.basename(split_excel_files_paths[0])} ...)")
+            
+            if files_generated_summary:
+                 final_summary_for_status.append("已產生報表檔案:")
+                 final_summary_for_status.extend(files_generated_summary)
+
+
             dropbox_status_msg_for_summary = ""
             if dropbox_token:
                 try:
                     dbx = dropbox.Dropbox(dropbox_token)
-                    files_to_upload_in_dir = [f_name for f_name in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f_name))]
-                    if files_to_upload_in_dir:
-                        for f_to_upload_name in files_to_upload_in_dir:
+                    # Collect all files to upload from output_dir
+                    all_files_in_output_dir = [f for f in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.xlsx')]
+                    
+                    uploaded_count = 0
+                    upload_errors = 0
+                    if all_files_in_output_dir:
+                        final_summary_for_status.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox...")
+                        for f_to_upload_name in all_files_in_output_dir:
                             path_of_file_to_upload = os.path.join(output_dir, f_to_upload_name)
-                            with open(path_of_file_to_upload, 'rb') as content_f_upload:
-                                dropbox_upload_target_path = dropbox_folder.rstrip('/') + '/' + f_to_upload_name
-                                dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
-                        dropbox_status_msg_for_summary = f"Dropbox狀態: ✅ 檔案已從 {output_dir} 上傳到 {dropbox_folder}"
-                    else:
-                        dropbox_status_msg_for_summary = f"Dropbox狀態: ⚠️ {output_dir} 中無檔案 (Excel可能未儲存成功)，未執行上傳。"
-                except Exception as e_dbx_upload:
-                    dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 上傳失敗 - {str(e_dbx_upload)}"
-            else:
-                dropbox_status_msg_for_summary = "Dropbox狀態: ⚠️ 未設定Dropbox Token，跳過上傳"
+                            try:
+                                with open(path_of_file_to_upload, 'rb') as content_f_upload:
+                                    dropbox_upload_target_path = dropbox_folder.rstrip('/') + '/' + f_to_upload_name
+                                    dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
+                                    result_log.append(f"  ✅ 已上傳 {f_to_upload_name} 到 Dropbox")
+                                    uploaded_count +=1
+                            except Exception as e_dbx_file_upload:
+                                result_log.append(f"  ❌ 上傳 {f_to_upload_name} 到 Dropbox 失敗: {e_dbx_file_upload}")
+                                upload_errors +=1
+                        
+                        if uploaded_count > 0 and upload_errors == 0:
+                            dropbox_status_msg_for_summary = f"Dropbox狀態: ✅ 所有 {uploaded_count} 個報表檔案已成功上傳到 {dropbox_folder}"
+                        elif uploaded_count > 0 and upload_errors > 0:
+                            dropbox_status_msg_for_summary = f"Dropbox狀態:⚠️ 部分上傳成功 ({uploaded_count} 個檔案)，但有 {upload_errors} 個檔案上傳失敗。詳見 console 日誌。"
+                        elif uploaded_count == 0 and upload_errors > 0:
+                            dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 所有 {upload_errors} 個檔案上傳失敗。詳見 console 日誌。"
+                        else: # Should not happen if all_files_in_output_dir was not empty
+                             dropbox_status_msg_for_summary = f"Dropbox狀態: ❓ 未知上傳狀態，請檢查日誌。"
+
+                    else: # No .xlsx files found in output_dir
+                        dropbox_status_msg_for_summary = f"Dropbox狀態: ⚠️ {output_dir} 中無 .xlsx 檔案可上傳。"
+                except Exception as e_dbx_init_or_list:
+                    dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 連接或列出檔案時發生錯誤 - {str(e_dbx_init_or_list)}"
+            else: # No dropbox token
+                dropbox_status_msg_for_summary = "Dropbox狀態: ⚠️ 未設定Dropbox Token，跳過上傳。"
             
             final_summary_for_status.append(dropbox_status_msg_for_summary)
-            final_summary_for_status.append(f"輸出檔案: {excel_file_path_local}")
+            if excel_file_path_local and os.path.exists(excel_file_path_local): # Keep this for primary output path
+                 final_summary_for_status.append(f"主要輸出目錄: {output_dir}")
         
-        elif not all_data and total_accounts > 0 :
+        elif not all_data and total_accounts > 0 : # Copied from existing code, but all_data check is a bit redundant now
             final_summary_for_status.append("最終結果: 未產生任何資料檔案。")
 
         final_summary_for_status.append(f"總耗時: {hours}小時 {minutes}分鐘 {seconds}秒")
@@ -601,7 +1042,11 @@ def main_job():
         status["running"] = False
         print("main_job 執行緒結束 (無論成功或失敗)")
 
-    return '\n'.join(result_log)
+    # Return combined log for debugging and record keeping, not directly for status["result"] anymore
+    # status["result"] is now primarily the final_summary_for_status
+    # However, the internal result_log is useful for detailed console printing or if needed later.
+    # For now, let's keep main_job returning the detailed log, but it's not directly set to status.
+    return '\\n'.join(result_log)
 
 @app.route('/run_main', methods=['POST'])
 def run_main():

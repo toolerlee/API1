@@ -979,32 +979,40 @@ def main_job():
                     # Collect all files to upload from output_dir
                     all_files_in_output_dir = [f for f in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.xlsx')]
                     
+                    # Get today's date string for the subdirectory
+                    today_date_str = datetime.now().strftime("%Y%m%d")
+                    # Construct the target Dropbox folder path including the date subfolder
+                    # Ensure dropbox_folder does not have trailing slash before adding new parts
+                    base_dropbox_folder = dropbox_folder.rstrip('/')
+                    dropbox_target_base_path_with_date = f"{base_dropbox_folder}/{today_date_str}"
+
                     uploaded_count = 0
                     upload_errors = 0
                     if all_files_in_output_dir:
-                        final_summary_for_status.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox...")
+                        final_summary_for_status.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox 路徑: {dropbox_target_base_path_with_date}...")
                         for f_to_upload_name in all_files_in_output_dir:
                             path_of_file_to_upload = os.path.join(output_dir, f_to_upload_name)
                             try:
                                 with open(path_of_file_to_upload, 'rb') as content_f_upload:
-                                    dropbox_upload_target_path = dropbox_folder.rstrip('/') + '/' + f_to_upload_name
+                                    # Final Dropbox path for the file
+                                    dropbox_upload_target_path = f"{dropbox_target_base_path_with_date}/{f_to_upload_name}"
                                     dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
-                                    result_log.append(f"  ✅ 已上傳 {f_to_upload_name} 到 Dropbox")
+                                    result_log.append(f"  ✅ 已上傳 {f_to_upload_name} 到 Dropbox ({dropbox_upload_target_path})")
                                     uploaded_count +=1
                             except Exception as e_dbx_file_upload:
-                                result_log.append(f"  ❌ 上傳 {f_to_upload_name} 到 Dropbox 失敗: {e_dbx_file_upload}")
+                                result_log.append(f"  ❌ 上傳 {f_to_upload_name} 到 Dropbox ({dropbox_target_base_path_with_date}/{f_to_upload_name}) 失敗: {e_dbx_file_upload}")
                                 upload_errors +=1
                         
                         if uploaded_count > 0 and upload_errors == 0:
-                            dropbox_status_msg_for_summary = f"Dropbox狀態: ✅ 所有 {uploaded_count} 個報表檔案已成功上傳到 {dropbox_folder}"
+                            dropbox_status_msg_for_summary = f"Dropbox狀態: ✅ 所有 {uploaded_count} 個報表檔案已成功上傳到 {dropbox_target_base_path_with_date}"
                         elif uploaded_count > 0 and upload_errors > 0:
-                            dropbox_status_msg_for_summary = f"Dropbox狀態:⚠️ 部分上傳成功 ({uploaded_count} 個檔案)，但有 {upload_errors} 個檔案上傳失敗。詳見 console 日誌。"
+                            dropbox_status_msg_for_summary = f"Dropbox狀態:⚠️ 部分上傳成功 ({uploaded_count} 個檔案到 {dropbox_target_base_path_with_date})，但有 {upload_errors} 個檔案上傳失敗。詳見 console 日誌。"
                         elif uploaded_count == 0 and upload_errors > 0:
-                            dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 所有 {upload_errors} 個檔案上傳失敗。詳見 console 日誌。"
-                        else: # Should not happen if all_files_in_output_dir was not empty
-                             dropbox_status_msg_for_summary = f"Dropbox狀態: ❓ 未知上傳狀態，請檢查日誌。"
+                            dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 所有 {upload_errors} 個檔案上傳到 {dropbox_target_base_path_with_date} 失敗。詳見 console 日誌。"
+                        else: 
+                             dropbox_status_msg_for_summary = f"Dropbox狀態: ❓ 未知上傳狀態 ({dropbox_target_base_path_with_date})，請檢查日誌。"
 
-                    else: # No .xlsx files found in output_dir
+                    else: 
                         dropbox_status_msg_for_summary = f"Dropbox狀態: ⚠️ {output_dir} 中無 .xlsx 檔案可上傳。"
                 except Exception as e_dbx_init_or_list:
                     dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 連接或列出檔案時發生錯誤 - {str(e_dbx_init_or_list)}"

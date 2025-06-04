@@ -870,12 +870,6 @@ def main_job():
             if not account_all_rows:
                  log_detail(f"    最終：帳號 {name} 未收集到任何獎金歷史資料列。")
 
-            with all_data_lock:
-                for single_data_row in account_all_rows:
-                    row_to_add_globally = [name, ACCOUNT] + single_data_row
-                    all_data.append(row_to_add_globally)
-                log_detail(f"H1. 已將 {len(account_all_rows)} 行資料添加完成。")
-
             log_detail(f"處理完成 (總耗時: {time.time() - process_start_time:.2f}s, 其中OCR總耗時: {ocr_total_classification_time_for_account:.2f}s)")
 
         total_accounts = len(accounts)
@@ -883,6 +877,21 @@ def main_job():
         failed_accounts = []
         start_time = time.time()
         result_log.append(f"\n開始處理，總帳號數量: {total_accounts}")
+
+        # --- NEW: Prepare Workbook for bonus.xlsx before ThreadPool ---
+        wb_bonus_main = Workbook()
+        if 'Sheet' in wb_bonus_main.sheetnames:
+            del wb_bonus_main['Sheet']
+        
+        headers_for_excel_sheet = [
+            "獎金周期", "獎金周期", "消費對等", "經營分紅", "安置獎金", "推薦獎金",
+            "消費分紅", "經營對等", "收件中心", "新增加權", "小計", "其他加項",
+            "其他減項", "稅額", "補充費", "總計", "紅利積分", "電子錢包",
+            "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數"
+        ]
+        created_sheets_for_bonus_xlsx = {} # To track sheets and if header is written
+        # --- End NEW ---
+
         with ThreadPoolExecutor(max_workers=max_concurrent_accounts) as executor:
             futures = []
             started_count = 0
@@ -896,9 +905,41 @@ def main_job():
             
             for future in as_completed(futures):
                 try:
-                    future.result()
+                    # NEW: fetch_account_data now returns data instead of appending to global all_data
+                    acc_name, acc_id, acc_data_rows, acc_extra_data_for_bonus2 = future.result() # Modified to get acc_extra_data for potential later use
                     success_count += 1
-                    result_log.append(f"目前登入成功進度: {success_count}/{total_accounts}")
+                    result_log.append(f"帳號 {acc_name}_{acc_id} 資料獲取成功。準備寫入 bonus.xlsx。")
+
+                    # --- NEW: Write data directly to wb_bonus_main ---
+                    sheet_key = f"{acc_name}_{acc_id}"
+                    ws_target_bonus_main = None
+                    if sheet_key not in created_sheets_for_bonus_xlsx:
+                        ws_target_bonus_main = wb_bonus_main.create_sheet(sheet_key[:31])
+                        ws_target_bonus_main.append(headers_for_excel_sheet)
+                        created_sheets_for_bonus_xlsx[sheet_key] = ws_target_bonus_main
+                    else:
+                        ws_target_bonus_main = created_sheets_for_bonus_xlsx[sheet_key]
+                    
+                    if acc_data_rows:
+                        for data_row in acc_data_rows:
+                            ws_target_bonus_main.append(data_row)
+                        result_log.append(f"  已將 {len(acc_data_rows)} 行數據寫入 {sheet_key} 工作表。")
+                    else:
+                        # If no data rows, we should still write a row with extra_data if Bonus2 needs it
+                        # For bonus.xlsx, if acc_data_rows is empty, the sheet will just have headers (or be empty if not even created).
+                        # The acc_extra_data (bonus_point, wallet, etc.) is part of each row in acc_data_rows.
+                        # If acc_data_rows is empty, then these specific values won't appear in bonus.xlsx data rows.
+                        # This is consistent with previous logic where empty all_data for an account led to empty sheet data.
+                        # The Bonus2.xlsx generation reads specific cells like 'Q2', 'R2' from these sheets.
+                        # If no data rows (including the one with extra_data) are written, 'Q2' etc. will be None.
+                        # Let's ensure that if acc_data_rows is empty, we write at least one row if acc_extra_data is present
+                        # to populate Q2, R2 for Bonus2.xlsx
+                        # The `acc_extra_data` is already part of `acc_data_rows` construction logic in `fetch_account_data`
+                        # The first row of `acc_data_rows` (if not empty) contains `extra_data`.
+                        # So, if `acc_data_rows` is empty, then the `extra_data` wasn't applicable or no transactions.
+                        result_log.append(f"  帳號 {sheet_key} 沒有獎金歷史數據列可寫入。")
+                    # --- End NEW ---
+
                 except Exception as e:
                     msg = str(e)
                     if '連續' in msg and '登入失敗' in msg:
@@ -922,141 +963,120 @@ def main_job():
         bonus2_file_path_local = None # For Bonus2.xlsx
         split_excel_files_paths = [] # For split files
 
-        if all_data:
-            headers_for_excel_sheet = [
-                "獎金周期", "獎金周期", "消費對等", "經營分紅", "安置獎金", "推薦獎金",
-                "消費分紅", "經營對等", "收件中心", "新增加權", "小計", "其他加項",
-                "其他減項", "稅額", "補充費", "總計", "紅利積分", "電子錢包",
-                "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數"
-            ]
-
-            folder_name = datetime.now().strftime('%Y%m%d_%H%M')
-            output_dir = os.path.join('output', folder_name)
-            os.makedirs(output_dir, exist_ok=True)
-            wb = Workbook()
-            if 'Sheet' in wb.sheetnames:
-                del wb['Sheet']
-            
-            acc_dict = defaultdict(list)
-            # 現在 all_data 中的每個元素就是一個包含帳號資訊和數據的列表
-            # row_with_name_acc 的格式是 [name, ACCOUNT, data_col1, data_col2, ...]
-            for row_with_name_acc in all_data:
-                acc_key = f"{row_with_name_acc[0]}_{row_with_name_acc[1]}" # name_ACCOUNT
-                data_part = row_with_name_acc[2:] # 實際要寫入 Excel 的數據行 (去除了 name 和 ACCOUNT)
-                acc_dict[acc_key].append(data_part)
-            
-            for acc_key, data_rows_for_acc in acc_dict.items():
-                ws = wb.create_sheet(acc_key[:31])
-                ws.append(headers_for_excel_sheet) # 寫入我們定義的標頭
-                for single_data_row_part in data_rows_for_acc:
-                    ws.append(single_data_row_part)
-            
+        if wb_bonus_main.sheetnames: # Check if any sheets were actually added
             excel_file_path_local = os.path.join(output_dir, 'bonus.xlsx')
-            wb.save(excel_file_path_local)
-            result_log.append(f"主要 bonus.xlsx 已儲存於: {excel_file_path_local}") # Log main bonus.xlsx save
+            wb_bonus_main.save(excel_file_path_local)
+            result_log.append(f"主要 bonus.xlsx 已儲存於: {excel_file_path_local}")
 
-            # --- Generate Bonus2.xlsx and Split files ---
-            # Bonus2.xlsx generation is NOW ENABLED
-            if excel_file_path_local and os.path.exists(excel_file_path_local):
-                bonus2_filename = 'Bonus2.xlsx'
-                bonus2_file_path_local = os.path.join(output_dir, bonus2_filename)
-                
-                generation_successful = _internal_generate_bonus2_report(excel_file_path_local, bonus2_file_path_local)
-                
-                if generation_successful and os.path.exists(bonus2_file_path_local):
-                    result_log.append(f"Bonus2.xlsx 已成功生成於: {bonus2_file_path_local}")
-                    # Splitting is NOW ENABLED
-                    split_excel_files_paths = _internal_split_bonus2_sheets(bonus2_file_path_local, output_dir)
-                    if split_excel_files_paths:
-                        result_log.append(f"Bonus2.xlsx 已成功分割成 {len(split_excel_files_paths)} 個檔案。")
-                    else:
-                        result_log.append("警告: Bonus2.xlsx 分割未產生任何檔案或發生錯誤。")
-                else:
-                    result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成於 {bonus2_file_path_local}。跳過分割。")
-                    bonus2_file_path_local = None 
-            else:
-                result_log.append("錯誤: 主要 bonus.xlsx 不存在，無法生成 Bonus2.xlsx。")
-            # --- End of Bonus2 and Split ---
+            try:
+                result_log.append(f"記憶體優化：嘗試釋放 bonus.xlsx 的 Workbook (wb_bonus_main)...")
+                if 'wb_bonus_main' in locals():
+                    del wb_bonus_main
+                if 'created_sheets_for_bonus_xlsx' in locals(): # also clear this helper dict
+                    del created_sheets_for_bonus_xlsx
+                collected_after_bonus_save = gc.collect()
+                result_log.append(f"記憶體優化：wb_bonus_main 釋放後 gc.collect() 清理了 {collected_after_bonus_save} 個物件。")
+            except Exception as e_gc_agg:
+                result_log.append(f"記憶體優化：釋放 wb_bonus_main 時發生錯誤: {str(e_gc_agg)}")
+        else:
+            result_log.append("警告: bonus.xlsx 未包含任何工作表，因此未儲存。")
+            excel_file_path_local = None # Ensure it's None if not saved
 
-            # Ensure these are defined even if generation/splitting is skipped/commented
-            if 'bonus2_file_path_local' not in locals() or bonus2_file_path_local is None: # Check explicitly for None as well
-                bonus2_file_path_local = None # Ensure it's None if not successfully created
-            if 'split_excel_files_paths' not in locals():
-                split_excel_files_paths = []
-
-            # --- Memory optimization for all_data before Dropbox upload ---
-            if 'all_data' in locals() and all_data is not None: # Ensure all_data exists and is not None
-                try:
-                    result_log.append(f"記憶體優化：嘗試釋放 all_data (大小約: {len(all_data)} 行)...")
-                    del all_data
-                    collected_objects_main = gc.collect()
-                    result_log.append(f"記憶體優化：gc.collect() 完成，清理了 {collected_objects_main} 個物件。")
-                except NameError: # Should be caught by 'in locals()' but as a safeguard
-                    result_log.append("記憶體優化：all_data 未定義，無需釋放。")
-                except Exception as e_gc_main:
-                    result_log.append(f"記憶體優化：釋放 all_data 或 gc.collect() 時發生錯誤: {str(e_gc_main)}")
-            else:
-                result_log.append("記憶體優化：all_data 不存在或為 None，跳過釋放。")
-            # --- End of Memory optimization for all_data ---
-
-            dropbox_status_msg_for_summary = ""
-            uploaded_count_for_summary = 0
-            upload_errors_for_summary = 0
-
-            if dropbox_token:
-                try:
-                    dbx = dropbox.Dropbox(dropbox_token)
-                    # Collect all files to upload from output_dir
-                    all_files_in_output_dir = [f for f in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.xlsx')]
-                    
-                    # Get today's date string for the subdirectory
-                    today_date_str = datetime.now().strftime("%Y%m%d")
-                    # Construct the target Dropbox folder path including the date subfolder
-                    # Ensure dropbox_folder does not have trailing slash before adding new parts
-                    base_dropbox_folder = dropbox_folder.rstrip('/')
-                    dropbox_target_base_path_with_date = f"{base_dropbox_folder}/{today_date_str}"
-
-                    uploaded_count = 0
-                    upload_errors = 0
-                    if all_files_in_output_dir:
-                        # Removed the line that added "準備上傳..." to final_summary_for_status
-                        # result_log.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox 路徑: {dropbox_target_base_path_with_date}...") # Keep this for detailed log
-                        for f_to_upload_name in all_files_in_output_dir:
-                            path_of_file_to_upload = os.path.join(output_dir, f_to_upload_name)
-                            try:
-                                with open(path_of_file_to_upload, 'rb') as content_f_upload:
-                                    # Final Dropbox path for the file
-                                    dropbox_upload_target_path = f"{dropbox_target_base_path_with_date}/{f_to_upload_name}"
-                                    dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
-                                    result_log.append(f"  ✅ 已上傳 {f_to_upload_name} 到 Dropbox ({dropbox_upload_target_path})")
-                                    uploaded_count +=1
-                                    uploaded_count_for_summary +=1
-                            except Exception as e_dbx_file_upload:
-                                result_log.append(f"  ❌ 上傳 {f_to_upload_name} 到 Dropbox ({dropbox_target_base_path_with_date}/{f_to_upload_name}) 失敗: {e_dbx_file_upload}")
-                                upload_errors +=1
-                                upload_errors_for_summary +=1
-                        
-                        if uploaded_count > 0 and upload_errors == 0:
-                            dropbox_status_msg_for_summary = f"Dropbox: ✅ 所有 {uploaded_count} 個報表已成功上傳到 {dropbox_target_base_path_with_date}"
-                        elif uploaded_count > 0 and upload_errors > 0:
-                            dropbox_status_msg_for_summary = f"Dropbox: ⚠️ 部分成功 ({uploaded_count} 個到 {dropbox_target_base_path_with_date})，{upload_errors} 個失敗"
-                        elif uploaded_count == 0 and upload_errors > 0:
-                            dropbox_status_msg_for_summary = f"Dropbox: ❌ 所有 {upload_errors} 個檔案上傳到 {dropbox_target_base_path_with_date} 失敗"
-                        else: 
-                             dropbox_status_msg_for_summary = f"Dropbox: ❓ 未知上傳狀態 ({dropbox_target_base_path_with_date})"
-                    else: 
-                        dropbox_status_msg_for_summary = f"Dropbox: ⚠️ {output_dir} 中無 .xlsx 檔案可上傳"
-                except Exception as e_dbx_init_or_list:
-                    dropbox_status_msg_for_summary = f"Dropbox: ❌ 連接或列出檔案時發生錯誤 - {str(e_dbx_init_or_list)}"
-            else: # No dropbox token
-                dropbox_status_msg_for_summary = "Dropbox: ⚠️ 未設定Token，跳過上傳"
+        # --- Generate Bonus2.xlsx and Split files (relies on excel_file_path_local) ---
+        if excel_file_path_local and os.path.exists(excel_file_path_local): # Check if bonus.xlsx was actually created and saved
+            # ... (Bonus2 and split logic remains, it reads from excel_file_path_local) ...
+            bonus2_filename = 'Bonus2.xlsx'
+            bonus2_file_path_local = os.path.join(output_dir, bonus2_filename)
             
-            # final_summary_for_status.append(dropbox_status_msg_for_summary) # Add this later with other summaries
-            if excel_file_path_local and os.path.exists(excel_file_path_local): # Keep this for primary output path
-                 result_log.append(f"主要輸出目錄: {output_dir}") # This is a detail, not for summary
+            generation_successful = _internal_generate_bonus2_report(excel_file_path_local, bonus2_file_path_local)
+            
+            if generation_successful and os.path.exists(bonus2_file_path_local):
+                result_log.append(f"Bonus2.xlsx 已成功生成於: {bonus2_file_path_local}")
+                # Splitting is NOW ENABLED
+                split_excel_files_paths = _internal_split_bonus2_sheets(bonus2_file_path_local, output_dir)
+                if split_excel_files_paths:
+                    result_log.append(f"Bonus2.xlsx 已成功分割成 {len(split_excel_files_paths)} 個檔案。")
+                else:
+                    result_log.append("警告: Bonus2.xlsx 分割未產生任何檔案或發生錯誤。")
+            else:
+                result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成於 {bonus2_file_path_local}。跳過分割。")
+                bonus2_file_path_local = None 
+        else:
+            result_log.append("錯誤: 主要 bonus.xlsx 不存在，無法生成 Bonus2.xlsx。")
+        # --- End of Bonus2 and Split ---
+
+        # Ensure these are defined even if generation/splitting is skipped/commented
+        if 'bonus2_file_path_local' not in locals() or bonus2_file_path_local is None: # Check explicitly for None as well
+            bonus2_file_path_local = None # Ensure it's None if not successfully created
+        if 'split_excel_files_paths' not in locals():
+            split_excel_files_paths = []
+
+        # --- Memory optimization for all_data before Dropbox upload ---
+        # REMOVED: The block for deleting global 'all_data' as it no longer exists.
+        # if 'all_data' in locals() and all_data is not None: 
+        #    ...
+        # else:
+        #    result_log.append("記憶體優化：all_data 不存在或為 None，跳過釋放。")
+        # --- End of Memory optimization for all_data ---
+
+        dropbox_status_msg_for_summary = ""
+        uploaded_count_for_summary = 0
+        upload_errors_for_summary = 0
+
+        if dropbox_token:
+            try:
+                dbx = dropbox.Dropbox(dropbox_token)
+                # Collect all files to upload from output_dir
+                all_files_in_output_dir = [f for f in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.xlsx')]
+                
+                # Get today's date string for the subdirectory
+                today_date_str = datetime.now().strftime("%Y%m%d")
+                # Construct the target Dropbox folder path including the date subfolder
+                # Ensure dropbox_folder does not have trailing slash before adding new parts
+                base_dropbox_folder = dropbox_folder.rstrip('/')
+                dropbox_target_base_path_with_date = f"{base_dropbox_folder}/{today_date_str}"
+
+                uploaded_count = 0
+                upload_errors = 0
+                if all_files_in_output_dir:
+                    # Removed the line that added "準備上傳..." to final_summary_for_status
+                    # result_log.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox 路徑: {dropbox_target_base_path_with_date}...") # Keep this for detailed log
+                    for f_to_upload_name in all_files_in_output_dir:
+                        path_of_file_to_upload = os.path.join(output_dir, f_to_upload_name)
+                        try:
+                            with open(path_of_file_to_upload, 'rb') as content_f_upload:
+                                # Final Dropbox path for the file
+                                dropbox_upload_target_path = f"{dropbox_target_base_path_with_date}/{f_to_upload_name}"
+                                dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
+                                result_log.append(f"  ✅ 已上傳 {f_to_upload_name} 到 Dropbox ({dropbox_upload_target_path})")
+                                uploaded_count +=1
+                                uploaded_count_for_summary +=1
+                        except Exception as e_dbx_file_upload:
+                            result_log.append(f"  ❌ 上傳 {f_to_upload_name} 到 Dropbox ({dropbox_target_base_path_with_date}/{f_to_upload_name}) 失敗: {e_dbx_file_upload}")
+                            upload_errors +=1
+                            upload_errors_for_summary +=1
+                    
+                    if uploaded_count > 0 and upload_errors == 0:
+                        dropbox_status_msg_for_summary = f"Dropbox: ✅ 所有 {uploaded_count} 個報表已成功上傳到 {dropbox_target_base_path_with_date}"
+                    elif uploaded_count > 0 and upload_errors > 0:
+                        dropbox_status_msg_for_summary = f"Dropbox: ⚠️ 部分成功 ({uploaded_count} 個到 {dropbox_target_base_path_with_date})，{upload_errors} 個失敗"
+                    elif uploaded_count == 0 and upload_errors > 0:
+                        dropbox_status_msg_for_summary = f"Dropbox: ❌ 所有 {upload_errors} 個檔案上傳到 {dropbox_target_base_path_with_date} 失敗"
+                    else: 
+                         dropbox_status_msg_for_summary = f"Dropbox: ❓ 未知上傳狀態 ({dropbox_target_base_path_with_date})"
+                else: 
+                    dropbox_status_msg_for_summary = f"Dropbox: ⚠️ {output_dir} 中無 .xlsx 檔案可上傳"
+            except Exception as e_dbx_init_or_list:
+                dropbox_status_msg_for_summary = f"Dropbox: ❌ 連接或列出檔案時發生錯誤 - {str(e_dbx_init_or_list)}"
+        else: # No dropbox token
+            dropbox_status_msg_for_summary = "Dropbox: ⚠️ 未設定Token，跳過上傳"
         
-        elif not all_data and total_accounts > 0 :
-            final_summary_for_status.append("最終結果: 未產生任何資料檔案。")
+        # final_summary_for_status.append(dropbox_status_msg_for_summary) # Add this later with other summaries
+        if excel_file_path_local and os.path.exists(excel_file_path_local): # Keep this for primary output path
+             result_log.append(f"主要輸出目錄: {output_dir}") # This is a detail, not for summary
+    
+        elif not excel_file_path_local and total_accounts > 0 : # Modified condition from 'not all_data'
+            final_summary_for_status.append("最終結果: 未產生任何資料檔案 (bonus.xlsx)。")
 
         # Construct the final summary here
         final_summary_for_status.append(f"帳號處理成功: {success_count} / {total_accounts}")
@@ -1082,7 +1102,7 @@ def main_job():
         status["progress"] = f"完成: {completed_count}/{total_accounts} (成功: {success_count})"
 
         console_message_final = "main_job 執行完畢. "
-        if all_data:
+        if excel_file_path_local and os.path.exists(excel_file_path_local):
             console_message_final += "資料已產生並嘗試上傳."
         elif total_accounts > 0:
             console_message_final += "但未產出任何資料."

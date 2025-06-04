@@ -6,6 +6,7 @@ import re
 from copy import copy
 from openpyxl.styles import Alignment, Font, Border, Side, Color
 from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
+import gc # Import garbage collector
 
 print("=== Flask API 啟動 ===")
 
@@ -365,6 +366,16 @@ def main_job():
                 
                 wb_target.save(output_bonus2_xlsx_path)
                 result_log.append(f"✅ Bonus2.xlsx 已成功生成並儲存於 {output_bonus2_xlsx_path}")
+
+                # Memory optimization
+                try:
+                    if 'wb_source' in locals(): del wb_source
+                    if 'wb_target' in locals(): del wb_target
+                    collected_b2 = gc.collect()
+                    result_log.append(f"記憶體優化 (_internal_generate_bonus2_report): gc.collect() 清理了 {collected_b2} 個物件。")
+                except Exception as e_gc_b2:
+                    result_log.append(f"記憶體優化 (_internal_generate_bonus2_report) 時發生錯誤: {str(e_gc_b2)}")
+
                 return True
             except Exception as e_gen_b2:
                 result_log.append(f"❌ 生成 Bonus2.xlsx 時發生錯誤: {str(e_gen_b2)}")
@@ -425,6 +436,16 @@ def main_job():
                     result_log.append(f"  已生成分割檔案: {full_split_filepath}")
                 
                 result_log.append(f"✅ Bonus2.xlsx 已成功按工作表分割。共生成 {len(split_files_generated_paths)} 個檔案。")
+                
+                # Memory optimization
+                try:
+                    if 'workbook_to_split' in locals(): del workbook_to_split
+                    # new_wb_for_sheet is reassigned in loop, last instance will be gc'd, or handle explicitly if large & problematic
+                    collected_split = gc.collect()
+                    result_log.append(f"記憶體優化 (_internal_split_bonus2_sheets): gc.collect() 清理了 {collected_split} 個物件。")
+                except Exception as e_gc_split:
+                    result_log.append(f"記憶體優化 (_internal_split_bonus2_sheets) 時發生錯誤: {str(e_gc_split)}")
+
                 return split_files_generated_paths
             except Exception as e_split_b2:
                 result_log.append(f"❌ 分割 Bonus2.xlsx 時發生錯誤: {str(e_split_b2)}")
@@ -944,14 +965,12 @@ def main_job():
                 
                 if generation_successful and os.path.exists(bonus2_file_path_local):
                     result_log.append(f"Bonus2.xlsx 已成功生成於: {bonus2_file_path_local}")
-                    # Splitting remains commented out as per user request
-                    ''' # MULTILINE COMMENT START for splitting
+                    # Splitting is NOW ENABLED
                     split_excel_files_paths = _internal_split_bonus2_sheets(bonus2_file_path_local, output_dir)
                     if split_excel_files_paths:
                         result_log.append(f"Bonus2.xlsx 已成功分割成 {len(split_excel_files_paths)} 個檔案。")
                     else:
                         result_log.append("警告: Bonus2.xlsx 分割未產生任何檔案或發生錯誤。")
-                    ''' # MULTILINE COMMENT END for splitting
                 else:
                     result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成於 {bonus2_file_path_local}。跳過分割。")
                     bonus2_file_path_local = None 
@@ -964,6 +983,21 @@ def main_job():
                 bonus2_file_path_local = None # Ensure it's None if not successfully created
             if 'split_excel_files_paths' not in locals():
                 split_excel_files_paths = []
+
+            # --- Memory optimization for all_data before Dropbox upload ---
+            if 'all_data' in locals() and all_data is not None: # Ensure all_data exists and is not None
+                try:
+                    result_log.append(f"記憶體優化：嘗試釋放 all_data (大小約: {len(all_data)} 行)...")
+                    del all_data
+                    collected_objects_main = gc.collect()
+                    result_log.append(f"記憶體優化：gc.collect() 完成，清理了 {collected_objects_main} 個物件。")
+                except NameError: # Should be caught by 'in locals()' but as a safeguard
+                    result_log.append("記憶體優化：all_data 未定義，無需釋放。")
+                except Exception as e_gc_main:
+                    result_log.append(f"記憶體優化：釋放 all_data 或 gc.collect() 時發生錯誤: {str(e_gc_main)}")
+            else:
+                result_log.append("記憶體優化：all_data 不存在或為 None，跳過釋放。")
+            # --- End of Memory optimization for all_data ---
 
             dropbox_status_msg_for_summary = ""
             uploaded_count_for_summary = 0

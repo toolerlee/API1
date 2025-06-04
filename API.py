@@ -606,21 +606,25 @@ def main_job():
             log_detail("處理開始")
             process_start_time = time.time()
             
-            session = requests.Session()
-            login_url = "https://member.star-rich.net/login"
-            headers = {"Referer": login_url}
-            
             login_successful = False
             actual_login_attempts = 0
+            ocr_total_classification_time_for_account = 0.0 # Renamed and will sum across main attempts
 
             for attempt in range(1, max_login_attempts + 1):
                 actual_login_attempts = attempt
-                log_detail(f"登入嘗試 {attempt}/{max_login_attempts} - 開始")
+                session = requests.Session() # NEW: Session created for each main login attempt
+                log_detail(f"登入嘗試 {attempt}/{max_login_attempts} - 開始 (使用新工作階段)")
                 login_attempt_start_time = time.time()
 
                 log_detail("  B1. 請求登入頁面 - 開始")
                 page_req_start_time = time.time()
-                resp = make_request(session, login_url, headers=headers)
+                # Ensure login_url and headers are defined correctly before this point.
+                # login_url = "https://member.star-rich.net/login"
+                # headers = {"Referer": login_url} (These are typically defined once outside the loop or passed in)
+                # For safety, let's ensure they are here if not globally defined within fetch_account_data scope
+                current_login_url = "https://member.star-rich.net/login"
+                current_headers = {"Referer": current_login_url}
+                resp = make_request(session, current_login_url, headers=current_headers)
                 log_detail(f"  B1. 請求登入頁面 - 完成 (耗時: {time.time() - page_req_start_time:.2f}s)")
                 
                 soup = BeautifulSoup(resp.text, "html.parser")
@@ -634,41 +638,44 @@ def main_job():
                 
                 img_tag = soup.find("img", {"id": "MemberLogin1_Image1"})
                 if not img_tag or not img_tag.get("src"):
-                    log_detail("  B2. 錯誤：找不到驗證碼圖片標籤或 src。跳過此登入嘗試。")
-                    time.sleep(retry_delay)
-                    continue 
+                    log_detail("  B2. 錯誤：找不到驗證碼圖片標籤或 src。此登入嘗試 {attempt} 失敗。")
+                    if attempt < max_login_attempts:
+                        log_detail("    準備進行下一次登入嘗試 (將使用全新工作階段)...")
+                        time.sleep(retry_delay)
+                    continue # Fail this login attempt, go to next in outer loop
 
                 img_url = "https://member.star-rich.net/" + img_tag["src"]
                 
-                ocr_total_classification_time = 0.0
-                ocr_loop_attempts = 0
+                log_detail(f"    B2a. OCR處理 - 請求驗證碼圖片 - 開始")
+                ocr_img_req_start_time = time.time()
+                img_resp = make_request(session, img_url, headers=current_headers) # Use current_headers
+                log_detail(f"    B2a. OCR處理 - 請求驗證碼圖片 - 完成 (耗時: {time.time() - ocr_img_req_start_time:.2f}s)")
+                
+                img_bytes = img_resp.content
+                
+                log_detail(f"    B2b. OCR處理 - 驗證碼識別(ddddocr) - 開始")
+                ocr_classify_start_time = time.time()
+                current_code = ocr.classification(img_bytes)
+                single_ocr_duration = time.time() - ocr_classify_start_time
+                ocr_total_classification_time_for_account += single_ocr_duration # Accumulate OCR time for the account
+                log_detail(f"    B2b. OCR處理 - 驗證碼識別(ddddocr) - 完成 (耗時: {single_ocr_duration:.2f}s, 識別結果: {current_code})")
+                
+                if not current_code: # Check if OCR returned empty string
+                    log_detail(f"    B2c. 驗證碼識別結果為空。此登入嘗試 {attempt} 失敗。")
+                    if attempt < max_login_attempts:
+                        log_detail("    準備進行下一次登入嘗試 (將使用全新工作階段)...")
+                        time.sleep(retry_delay)
+                    continue # Fail this login attempt
 
-                current_code = ""
-                while True:
-                    ocr_loop_attempts += 1
-                    log_detail(f"    B2a. OCR嘗試 {ocr_loop_attempts} - 請求驗證碼圖片 - 開始")
-                    ocr_img_req_start_time = time.time()
-                    img_resp = make_request(session, img_url, headers=headers)
-                    log_detail(f"    B2a. OCR嘗試 {ocr_loop_attempts} - 請求驗證碼圖片 - 完成 (耗時: {time.time() - ocr_img_req_start_time:.2f}s)")
-                    
-                    img_bytes = img_resp.content
-                    
-                    log_detail(f"    B2b. OCR嘗試 {ocr_loop_attempts} - 驗證碼識別(ddddocr) - 開始")
-                    ocr_classify_start_time = time.time()
-                    current_code = ocr.classification(img_bytes)
-                    single_ocr_duration = time.time() - ocr_classify_start_time
-                    ocr_total_classification_time += single_ocr_duration
-                    log_detail(f"    B2b. OCR嘗試 {ocr_loop_attempts} - 驗證碼識別(ddddocr) - 完成 (耗時: {single_ocr_duration:.2f}s, 識別結果: {current_code})")
-                    
-                    if not (len(current_code) > 0 and current_code[-1] == '4'):
-                        log_detail(f"    B2c. OCR嘗試 {ocr_loop_attempts} - 驗證碼 '{current_code}' 符合要求，跳出OCR迴圈")
-                        break
-                    else:
-                        log_detail(f"    B2c. OCR嘗試 {ocr_loop_attempts} - 驗證碼 '{current_code}' 以'4'結尾，重新獲取")
-                    
-                    if ocr_loop_attempts >= 5:
-                        log_detail(f"    B2d. OCR嘗試超過 {ocr_loop_attempts} 次，強制使用最後結果 '{current_code}' 並跳出OCR迴圈")
-                        break
+                # Main condition for CAPTCHA failure leading to "browser restart"
+                if current_code[-1] == '4':
+                    log_detail(f"    B2c. 驗證碼 '{current_code}' 以'4'結尾。此登入嘗試 {attempt} 失敗。")
+                    if attempt < max_login_attempts:
+                        log_detail("    準備進行下一次登入嘗試 (將使用全新工作階段)...")
+                        time.sleep(retry_delay)
+                    continue # Fail this login attempt, go to next in outer loop (new session)
+                else:
+                    log_detail(f"    B2c. 驗證碼 '{current_code}' 初步通過 (不以'4'結尾)。繼續提交登入。")
                 
                 data["MemberLogin1$txtAccound"] = ACCOUNT
                 data["MemberLogin1$txtPassword"] = PASSWORD
@@ -678,37 +685,41 @@ def main_job():
 
                 log_detail("  B3. 提交登入表單 - 開始")
                 submit_login_start_time = time.time()
-                login_resp = make_request(session, login_url, method='post', headers=headers, data=data)
+                login_resp = make_request(session, current_login_url, method='post', headers=current_headers, data=data)
                 log_detail(f"  B3. 提交登入表單 - 完成 (耗時: {time.time() - submit_login_start_time:.2f}s)")
 
                 if "登出" in login_resp.text or "歡迎" in login_resp.text:
                     log_detail(f"登入嘗試 {attempt} - 成功 (耗時: {time.time() - login_attempt_start_time:.2f}s)")
                     login_successful = True
-                    break
+                    break # Break from the outer for login_attempt loop
                 
                 error_msg_detected = ""
                 if "驗證碼" in login_resp.text or "驗證碼錯誤" in login_resp.text or "請輸入驗證碼" in login_resp.text:
-                    error_msg_detected = "驗證碼相關錯誤"
+                    error_msg_detected = "伺服器拒絕驗證碼或格式錯誤"
+                # Simplified existing error detection, ensure it covers other cases
+                elif "帳號密碼錯誤" in login_resp.text: # Example, add more specific checks if needed
+                    error_msg_detected = "帳號密碼錯誤"
                 else:
-                    error_msg_detected = "其他登入失敗"
+                    error_msg_detected = "其他登入失敗" # Default message
                 
                 log_detail(f"登入嘗試 {attempt} - 失敗 ({error_msg_detected}, 本次嘗試耗時: {time.time() - login_attempt_start_time:.2f}s)")
                 if attempt < max_login_attempts:
-                    log_detail("    準備進行下一次登入嘗試...")
+                    log_detail("    準備進行下一次登入嘗試 (將使用全新工作階段)...")
                     time.sleep(retry_delay)
             
             if not login_successful:
                 log_detail(f"連續 {actual_login_attempts} 次登入失敗")
                 with open(retry_log_path, 'a', encoding='utf-8') as retry_file:
-                    retry_file.write(f"{name}\n{ACCOUNT}\n{PASSWORD}\n")
+                    retry_file.write(f"{name}\\n{ACCOUNT}\\n{PASSWORD}\\n")
                 with open(fail_log_path, 'a', encoding='utf-8') as fail_file:
-                    fail_file.write(f"{name}_{ACCOUNT} 連續{actual_login_attempts}次登入失敗\n")
-                raise Exception(f"{name}_{ACCOUNT} 連續{actual_login_attempts}次登入失敗 (OCR總耗時: {ocr_total_classification_time:.2f}s)")
+                    fail_file.write(f"{name}_{ACCOUNT} 連續{actual_login_attempts}次登入失敗\\n")
+                raise Exception(f"{name}_{ACCOUNT} 連續{actual_login_attempts}次登入失敗 (OCR總耗時: {ocr_total_classification_time_for_account:.2f}s)")
 
             log_detail("C1. 請求主頁 - 開始")
             home_page_start_time = time.time()
             home_url = "https://member.star-rich.net/default"
-            home_resp = make_request(session, home_url, headers=headers)
+            # Use the session from the successful login attempt
+            home_resp = make_request(session, home_url, headers=current_headers) # Use current_headers for consistency
             log_detail(f"C1. 請求主頁 - 完成 (耗時: {time.time() - home_page_start_time:.2f}s)")
 
             log_detail("C2. 解析主頁內容 - 開始")
@@ -727,7 +738,7 @@ def main_job():
             log_detail("D1. 請求會員列表頁 - 開始")
             member_list_start_time = time.time()
             member_url = "https://member.star-rich.net/mem_memlist"
-            member_resp = make_request(session, member_url, headers=headers)
+            member_resp = make_request(session, member_url, headers=current_headers)
             log_detail(f"D1. 請求會員列表頁 - 完成 (耗時: {time.time() - member_list_start_time:.2f}s)")
 
             log_detail("D2. 解析會員列表頁 - 開始")
@@ -744,7 +755,7 @@ def main_job():
             log_detail("E1. 請求獎金歷史初始頁 - 開始")
             bonus_init_start_time = time.time()
             bonus_history_url = "https://member.star-rich.net/bonushistory"
-            resp_bonus_init = make_request(session, bonus_history_url, headers=headers)
+            resp_bonus_init = make_request(session, bonus_history_url, headers=current_headers) # Use current_headers
             log_detail(f"E1. 請求獎金歷史初始頁 - 完成 (耗時: {time.time() - bonus_init_start_time:.2f}s)")
 
             log_detail("E2. 解析獎金歷史初始頁 - 開始")
@@ -767,7 +778,7 @@ def main_job():
 
             log_detail("F1. 提交獎金歷史查詢表單 (第一頁) - 開始")
             bonus_submit_start_time = time.time()
-            response_bonus_page = make_request(session, bonus_history_url, method='post', headers=headers, data=form_data_bonus)
+            response_bonus_page = make_request(session, bonus_history_url, method='post', headers=current_headers, data=form_data_bonus) # Use current_headers
             log_detail(f"F1. 提交獎金歷史查詢表單 (第一頁) - 完成 (耗時: {time.time() - bonus_submit_start_time:.2f}s)")
             current_bonus_soup = BeautifulSoup(response_bonus_page.text, "html.parser")
 
@@ -831,7 +842,7 @@ def main_job():
                     "ctl00$cphPageInner$cphContent$txtStartDate": start_date,
                     "ctl00$cphPageInner$cphContent$txtEndDate": end_date,
                 }
-                response_bonus_page = make_request(session, bonus_history_url, method='post', headers=headers, data=form_data_bonus_next_page)
+                response_bonus_page = make_request(session, bonus_history_url, method='post', headers=current_headers, data=form_data_bonus_next_page) # Use current_headers
                 log_detail(f"  請求獎金歷史下一頁 (第 {bonus_page_count + 1} 頁) - 完成 (耗時: {time.time() - next_page_req_start_time:.2f}s)")
                 current_bonus_soup = BeautifulSoup(response_bonus_page.text, "html.parser")
             
@@ -844,7 +855,7 @@ def main_job():
                     all_data.append(row_to_add_globally)
                 log_detail(f"H1. 已將 {len(account_all_rows)} 行資料添加完成。")
 
-            log_detail(f"處理完成 (總耗時: {time.time() - process_start_time:.2f}s, 其中OCR總耗時: {ocr_total_classification_time:.2f}s)")
+            log_detail(f"處理完成 (總耗時: {time.time() - process_start_time:.2f}s, 其中OCR總耗時: {ocr_total_classification_time_for_account:.2f}s)")
 
         total_accounts = len(accounts)
         success_count = 0
@@ -882,6 +893,9 @@ def main_job():
         hours = int(total_time // 3600)
         minutes = int((total_time % 3600) // 60)
         seconds = int(total_time % 60)
+
+        final_summary_for_status = [] # 初始化 final_summary_for_status
+        # 在處理 all_data 和 Dropbox 上傳之前初始化
 
         excel_file_path_local = None
         bonus2_file_path_local = None # For Bonus2.xlsx
@@ -921,9 +935,7 @@ def main_job():
             result_log.append(f"主要 bonus.xlsx 已儲存於: {excel_file_path_local}") # Log main bonus.xlsx save
 
             # --- Generate Bonus2.xlsx and Split files ---
-            #Temporarily commenting out Bonus2 and split generation for memory profiling
-            result_log.append("資訊: Bonus2.xlsx 的生成與分割功能已暫時停用以進行記憶體分析。")
-            ''' # MULTILINE COMMENT START
+            # Bonus2.xlsx generation is NOW ENABLED
             if excel_file_path_local and os.path.exists(excel_file_path_local):
                 bonus2_filename = 'Bonus2.xlsx'
                 bonus2_file_path_local = os.path.join(output_dir, bonus2_filename)
@@ -932,26 +944,31 @@ def main_job():
                 
                 if generation_successful and os.path.exists(bonus2_file_path_local):
                     result_log.append(f"Bonus2.xlsx 已成功生成於: {bonus2_file_path_local}")
+                    # Splitting remains commented out as per user request
+                    ''' # MULTILINE COMMENT START for splitting
                     split_excel_files_paths = _internal_split_bonus2_sheets(bonus2_file_path_local, output_dir)
                     if split_excel_files_paths:
                         result_log.append(f"Bonus2.xlsx 已成功分割成 {len(split_excel_files_paths)} 個檔案。")
                     else:
                         result_log.append("警告: Bonus2.xlsx 分割未產生任何檔案或發生錯誤。")
+                    ''' # MULTILINE COMMENT END for splitting
                 else:
                     result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成於 {bonus2_file_path_local}。跳過分割。")
                     bonus2_file_path_local = None 
             else:
                 result_log.append("錯誤: 主要 bonus.xlsx 不存在，無法生成 Bonus2.xlsx。")
-            ''' # MULTILINE COMMENT END
             # --- End of Bonus2 and Split ---
 
-            # Ensure these are defined even if generation is skipped
-            if 'bonus2_file_path_local' not in locals():
-                bonus2_file_path_local = None
+            # Ensure these are defined even if generation/splitting is skipped/commented
+            if 'bonus2_file_path_local' not in locals() or bonus2_file_path_local is None: # Check explicitly for None as well
+                bonus2_file_path_local = None # Ensure it's None if not successfully created
             if 'split_excel_files_paths' not in locals():
                 split_excel_files_paths = []
 
             dropbox_status_msg_for_summary = ""
+            uploaded_count_for_summary = 0
+            upload_errors_for_summary = 0
+
             if dropbox_token:
                 try:
                     dbx = dropbox.Dropbox(dropbox_token)
@@ -968,7 +985,8 @@ def main_job():
                     uploaded_count = 0
                     upload_errors = 0
                     if all_files_in_output_dir:
-                        final_summary_for_status.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox 路徑: {dropbox_target_base_path_with_date}...")
+                        # Removed the line that added "準備上傳..." to final_summary_for_status
+                        # result_log.append(f"準備上傳 {len(all_files_in_output_dir)} 個檔案到 Dropbox 路徑: {dropbox_target_base_path_with_date}...") # Keep this for detailed log
                         for f_to_upload_name in all_files_in_output_dir:
                             path_of_file_to_upload = os.path.join(output_dir, f_to_upload_name)
                             try:
@@ -978,32 +996,51 @@ def main_job():
                                     dbx.files_upload(content_f_upload.read(), dropbox_upload_target_path, mode=dropbox.files.WriteMode.overwrite)
                                     result_log.append(f"  ✅ 已上傳 {f_to_upload_name} 到 Dropbox ({dropbox_upload_target_path})")
                                     uploaded_count +=1
+                                    uploaded_count_for_summary +=1
                             except Exception as e_dbx_file_upload:
                                 result_log.append(f"  ❌ 上傳 {f_to_upload_name} 到 Dropbox ({dropbox_target_base_path_with_date}/{f_to_upload_name}) 失敗: {e_dbx_file_upload}")
                                 upload_errors +=1
+                                upload_errors_for_summary +=1
                         
                         if uploaded_count > 0 and upload_errors == 0:
-                            dropbox_status_msg_for_summary = f"Dropbox狀態: ✅ 所有 {uploaded_count} 個報表檔案已成功上傳到 {dropbox_target_base_path_with_date}"
+                            dropbox_status_msg_for_summary = f"Dropbox: ✅ 所有 {uploaded_count} 個報表已成功上傳到 {dropbox_target_base_path_with_date}"
                         elif uploaded_count > 0 and upload_errors > 0:
-                            dropbox_status_msg_for_summary = f"Dropbox狀態:⚠️ 部分上傳成功 ({uploaded_count} 個檔案到 {dropbox_target_base_path_with_date})，但有 {upload_errors} 個檔案上傳失敗。詳見 console 日誌。"
+                            dropbox_status_msg_for_summary = f"Dropbox: ⚠️ 部分成功 ({uploaded_count} 個到 {dropbox_target_base_path_with_date})，{upload_errors} 個失敗"
                         elif uploaded_count == 0 and upload_errors > 0:
-                            dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 所有 {upload_errors} 個檔案上傳到 {dropbox_target_base_path_with_date} 失敗。詳見 console 日誌。"
+                            dropbox_status_msg_for_summary = f"Dropbox: ❌ 所有 {upload_errors} 個檔案上傳到 {dropbox_target_base_path_with_date} 失敗"
                         else: 
-                             dropbox_status_msg_for_summary = f"Dropbox狀態: ❓ 未知上傳狀態 ({dropbox_target_base_path_with_date})，請檢查日誌。"
-
+                             dropbox_status_msg_for_summary = f"Dropbox: ❓ 未知上傳狀態 ({dropbox_target_base_path_with_date})"
                     else: 
-                        dropbox_status_msg_for_summary = f"Dropbox狀態: ⚠️ {output_dir} 中無 .xlsx 檔案可上傳。"
+                        dropbox_status_msg_for_summary = f"Dropbox: ⚠️ {output_dir} 中無 .xlsx 檔案可上傳"
                 except Exception as e_dbx_init_or_list:
-                    dropbox_status_msg_for_summary = f"Dropbox狀態: ❌ 連接或列出檔案時發生錯誤 - {str(e_dbx_init_or_list)}"
+                    dropbox_status_msg_for_summary = f"Dropbox: ❌ 連接或列出檔案時發生錯誤 - {str(e_dbx_init_or_list)}"
             else: # No dropbox token
-                dropbox_status_msg_for_summary = "Dropbox狀態: ⚠️ 未設定Dropbox Token，跳過上傳。"
+                dropbox_status_msg_for_summary = "Dropbox: ⚠️ 未設定Token，跳過上傳"
             
-            final_summary_for_status.append(dropbox_status_msg_for_summary)
+            # final_summary_for_status.append(dropbox_status_msg_for_summary) # Add this later with other summaries
             if excel_file_path_local and os.path.exists(excel_file_path_local): # Keep this for primary output path
-                 final_summary_for_status.append(f"主要輸出目錄: {output_dir}")
+                 result_log.append(f"主要輸出目錄: {output_dir}") # This is a detail, not for summary
         
-        elif not all_data and total_accounts > 0 : # Copied from existing code, but all_data check is a bit redundant now
+        elif not all_data and total_accounts > 0 :
             final_summary_for_status.append("最終結果: 未產生任何資料檔案。")
+
+        # Construct the final summary here
+        final_summary_for_status.append(f"帳號處理成功: {success_count} / {total_accounts}")
+        if failed_accounts:
+            final_summary_for_status.append(f"帳號處理失敗: {len(failed_accounts)}")
+            final_summary_for_status.append("失敗帳號列表:")
+            for acc_fail_msg in failed_accounts:
+                final_summary_for_status.append(f"  - {acc_fail_msg}")
+        else:
+            final_summary_for_status.append("帳號處理失敗: 0")
+
+        if dropbox_token: # Only show upload counts if Dropbox was attempted
+            final_summary_for_status.append(f"Dropbox 上傳成功: {uploaded_count_for_summary}")
+            final_summary_for_status.append(f"Dropbox 上傳失敗: {upload_errors_for_summary}")
+        
+        # Add the specific dropbox status message (which includes path or errors)
+        if dropbox_status_msg_for_summary: # ensure it's not empty
+            final_summary_for_status.append(dropbox_status_msg_for_summary)
 
         final_summary_for_status.append(f"總耗時: {hours}小時 {minutes}分鐘 {seconds}秒")
         

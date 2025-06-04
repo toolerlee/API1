@@ -921,6 +921,9 @@ def main_job():
             result_log.append(f"主要 bonus.xlsx 已儲存於: {excel_file_path_local}") # Log main bonus.xlsx save
 
             # --- Generate Bonus2.xlsx and Split files ---
+            #Temporarily commenting out Bonus2 and split generation for memory profiling
+            result_log.append("資訊: Bonus2.xlsx 的生成與分割功能已暫時停用以進行記憶體分析。")
+            ''' # MULTILINE COMMENT START
             if excel_file_path_local and os.path.exists(excel_file_path_local):
                 bonus2_filename = 'Bonus2.xlsx'
                 bonus2_file_path_local = os.path.join(output_dir, bonus2_filename)
@@ -929,7 +932,6 @@ def main_job():
                 
                 if generation_successful and os.path.exists(bonus2_file_path_local):
                     result_log.append(f"Bonus2.xlsx 已成功生成於: {bonus2_file_path_local}")
-                    # Now split Bonus2.xlsx. Split files will be in the same output_dir.
                     split_excel_files_paths = _internal_split_bonus2_sheets(bonus2_file_path_local, output_dir)
                     if split_excel_files_paths:
                         result_log.append(f"Bonus2.xlsx 已成功分割成 {len(split_excel_files_paths)} 個檔案。")
@@ -937,40 +939,17 @@ def main_job():
                         result_log.append("警告: Bonus2.xlsx 分割未產生任何檔案或發生錯誤。")
                 else:
                     result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成於 {bonus2_file_path_local}。跳過分割。")
-                    bonus2_file_path_local = None # Ensure it's None if not generated
+                    bonus2_file_path_local = None 
             else:
                 result_log.append("錯誤: 主要 bonus.xlsx 不存在，無法生成 Bonus2.xlsx。")
+            ''' # MULTILINE COMMENT END
             # --- End of Bonus2 and Split ---
 
-
-        final_summary_for_status = []
-        final_summary_for_status.append("=== 處理結果摘要 ===")
-
-        if total_accounts > 0:
-            final_summary_for_status.append(f"帳號處理進度: {completed_count}/{total_accounts} 個帳號已嘗試")
-            final_summary_for_status.append(f"成功擷取資料: {success_count} 個帳號")
-            final_summary_for_status.append(f"登入/處理失敗: {len(failed_accounts)} 個帳號")
-            if failed_accounts:
-                final_summary_for_status.append("失敗帳號列表:")
-                for acc_failure_msg_item in failed_accounts:
-                    final_summary_for_status.append(f"  - {acc_failure_msg_item}")
-        else:
-            final_summary_for_status.append("資訊: 未載入任何帳號進行處理。")
-
-        # --- Update summary for file generation and Dropbox upload ---
-        if excel_file_path_local or bonus2_file_path_local or split_excel_files_paths:
-            files_generated_summary = []
-            if excel_file_path_local and os.path.exists(excel_file_path_local):
-                files_generated_summary.append(f"  - 主要報表: {os.path.basename(excel_file_path_local)}")
-            if bonus2_file_path_local and os.path.exists(bonus2_file_path_local):
-                files_generated_summary.append(f"  - 詳細總結報表: {os.path.basename(bonus2_file_path_local)}")
-            if split_excel_files_paths:
-                files_generated_summary.append(f"  - 分割報表: {len(split_excel_files_paths)} 個檔案 (如 {os.path.basename(split_excel_files_paths[0])} ...)")
-            
-            if files_generated_summary:
-                 final_summary_for_status.append("已產生報表檔案:")
-                 final_summary_for_status.extend(files_generated_summary)
-
+            # Ensure these are defined even if generation is skipped
+            if 'bonus2_file_path_local' not in locals():
+                bonus2_file_path_local = None
+            if 'split_excel_files_paths' not in locals():
+                split_excel_files_paths = []
 
             dropbox_status_msg_for_summary = ""
             if dropbox_token:

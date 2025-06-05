@@ -1,33 +1,24 @@
-# 模式設定
+[DEFAULT]
 mode=0  # 0=一般模式, 1=重試模式
-
-# 並發處理設定
-max_concurrent_accounts=5  # 同時處理的帳號數量
-thread_start_delay=0.5  # 線程啟動延遲(秒)
-
-# 登入重試設定
-max_login_attempts=5  # 登入重試次數
-
-# 請求間隔設定
-request_delay=1.0  # 每次請求之間的延遲時間(秒)
+max_concurrent_accounts=30 # 同時處理的帳號數量
+start_date=2025/01/01 # 獎金查詢開始日期
+end_date=2025/12/31   # 獎金查詢結束日期
+thread_start_delay=0.5 # 每個帳號開始處理前的延遲（秒）
+max_login_attempts=3   # 每個帳號的最大登入嘗試次數
+request_delay=2.0      # 每次請求之間的延遲（秒）
 max_request_retries=3  # 請求失敗時的最大重試次數
-retry_delay=5.0  # 重試之間的延遲時間(秒)
-
-# 日期設定
-start_date=2025/01/01  # 開始日期
-end_date=2025/12/31  # 結束日期
-
-# Dropbox Settings
+retry_delay=3.0        # 重試前的延遲（秒）
+# --- Dropbox Settings ---
 dropbox_app_key=vjxxknfipwukyzs
 dropbox_app_secret=905vcme1i68i3ke
 dropbox_refresh_token=3oC3tEUkH4kAAAAAAAAAAZynwxJdINsFTND_BhYiGuAvzQChRlLJR5U4HClZJ3n_
-dropbox_token= # 可以留空，程式會自動 refresh
-dropbox_folder=/output  # 報表上傳到 Dropbox 的哪個資料夾 (相對於 App Folder)
-dropbox_account_file_path = /account/account.txt # 存放帳號密碼的 txt 檔在 Dropbox 中的完整路徑 (相對於 App Folder)
+# dropbox_token=your_short_lived_access_token_here # 這個通常由程式自動取得，但可以手動設定用於測試
+# --- API and File Settings ---
+dropbox_account_file_path=/Apps/ExcelAPI-app/account/account.txt # Dropbox 中帳號檔案的絕對路徑
+dropbox_folder=/output  # 上傳報表的 Dropbox 資料夾
+# --- Security Settings ---
+api_action_password=CHANGEME # 用於執行下載/上傳 account.txt 的密碼
 
-# --- API Security ---
-API_ACTION_PASSWORD = 0857
-
-# --- Flask Server Settings (Optional, Render.com 通常會用 PORT 環境變數) ---
-# FLASK_HOST = 0.0.0.0
-# FLASK_PORT = 5000
+# --- Flask Server Settings (Optional) ---
+FLASK_HOST=0.0.0.0 # 監聽所有網絡介面
+FLASK_PORT=5000     # Flask 服務運行的端口

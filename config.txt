@@ -24,6 +24,9 @@ dropbox_refresh_token= eS5fH8rlRL4AAAAAAAAAAWRwXgPu2zBfWhw4156uqtt-usI5fk8mXD-I9
 dropbox_token=   # 可以留空，程式會自動 refresh
 dropbox_folder=/output   # 這一行很重要，指定 Dropbox 雲端的目標資料夾
 
+dropbox_folder = /ExcelAPI/ReportOutput  # Dropbox中存放報表的基礎資料夾
+dropbox_account_file_path = /Apps/ExcelAPI-app/account/account.txt # Dropbox中存放帳號檔的完整路徑
+
 # --- API Security ---
 API_ACTION_PASSWORD = 0857
 

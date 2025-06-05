@@ -708,6 +708,7 @@ def main_job():
 config = {}
 def load_config():
     global config
+    import requests # <-- ADD IMPORT HERE
     default_config = {
         'mode': 0, 'max_concurrent_accounts': 5, 'start_date': '2024/01/01', 'end_date': '2024/12/31',
         'thread_start_delay': 0.5, 'max_login_attempts': 2, 'request_delay': 1.0,

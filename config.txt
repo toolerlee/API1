@@ -6,7 +6,7 @@ max_concurrent_accounts=5  # 同時處理的帳號數量
 thread_start_delay=0.5  # 線程啟動延遲(秒)
 
 # 登入重試設定
-max_login_attempts=3  # 登入重試次數
+max_login_attempts=5  # 登入重試次數
 
 # 請求間隔設定
 request_delay=1.0  # 每次請求之間的延遲時間(秒)

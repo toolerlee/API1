@@ -634,7 +634,7 @@ def main_job():
 config = {}
 def load_config():
     global config
-    import requests
+    import requests # 確保 requests 在此處
     default_config = {
         'mode': 0, 'max_concurrent_accounts': 5, 'start_date': '2024/01/01', 'end_date': '2024/12/31',
         'thread_start_delay': 0.5, 'max_login_attempts': 2, 'request_delay': 1.0,
@@ -644,6 +644,7 @@ def load_config():
         'dropbox_account_file_path': '/Apps/ExcelAPI-app/account/account.txt',
         'API_ACTION_PASSWORD': 'CHANGEME'
     }
+    # 讀取 config.txt 檔案
     if os.path.exists('config.txt'):
         with open('config.txt', 'r', encoding='utf-8') as f:
             for line in f:
@@ -652,40 +653,51 @@ def load_config():
                 if '=' in line:
                     k, v = line.split('=', 1)
                     k, v = k.strip(), v.split('#')[0].strip()
-                    if k in default_config:
-                        if isinstance(default_config[k], int): config[k] = int(v)
-                        elif isinstance(default_config[k], float): config[k] = float(v)
-                        else: config[k] = v
-                    else:
-                        config[k] = v
+                    # 直接存儲，稍後再決定類型
+                    config[k] = v
+    
+    # 用 default_config 填補缺失的值並轉換類型
     for k_default, v_default in default_config.items():
         if k_default not in config:
             config[k_default] = v_default
-    
-    if not config.get('dropbox_token') and config.get('dropbox_app_key') and config.get('dropbox_app_secret') and config.get('dropbox_refresh_token'):
-        def get_access_token_from_refresh_global():
-            try:
-                resp_token = requests.post(
-                    'https://api.dropbox.com/oauth2/token',
-                    data={
-                        'grant_type': 'refresh_token', 'refresh_token': config['dropbox_refresh_token'],
-                        'client_id': config['dropbox_app_key'], 'client_secret': config['dropbox_app_secret'],
-                    }
-                )
-                resp_token.raise_for_status()
-                return resp_token.json().get('access_token', '')
-            except Exception as e_token_refresh:
-                print(f"❌ Dropbox refresh token 換取 access token 失敗 (global load): {e_token_refresh}")
-                return ''
-        
-        refreshed_token = get_access_token_from_refresh_global()
-        if refreshed_token:
-            config['dropbox_token'] = refreshed_token
-            print("✅ 已自動用 refresh token 取得 Dropbox access token (global load)")
         else:
-            print("❌ 無法自動取得 Dropbox access token (global load)，請檢查 refresh token 設定")
+            # 根據預設值的類型來轉換 config.txt 中讀取到的字串
+            if isinstance(v_default, int): config[k_default] = int(config[k_default])
+            elif isinstance(v_default, float): config[k_default] = float(config[k_default])
 
-    print(f"配置已載入: {config}")
+    # --- 關鍵修正：優先使用 Refresh Token ---
+    # 如果有 refresh token，就總是優先用它來獲取最新的 access token
+    # 這對於部署在 Render 這種會休眠的服務上至關重要
+    if config.get('dropbox_app_key') and config.get('dropbox_app_secret') and config.get('dropbox_refresh_token'):
+        print("偵測到 Refresh Token，正在嘗試更新 Access Token...")
+        try:
+            resp_token = requests.post(
+                'https://api.dropbox.com/oauth2/token',
+                data={
+                    'grant_type': 'refresh_token',
+                    'refresh_token': config['dropbox_refresh_token'],
+                    'client_id': config['dropbox_app_key'],
+                    'client_secret': config['dropbox_app_secret'],
+                },
+                timeout=15 # 設定超時
+            )
+            resp_token.raise_for_status() # 如果請求失敗 (如 400, 401)，會拋出錯誤
+            new_access_token = resp_token.json().get('access_token')
+            if new_access_token:
+                config['dropbox_token'] = new_access_token # 覆蓋掉舊的或過期的 token
+                print("✅ 成功：已使用 Refresh Token 更新 Access Token。")
+            else:
+                 print("❌ 失敗：Refresh Token 請求成功，但回應中沒有 Access Token。")
+        except Exception as e_token_refresh:
+            print(f"❌ 嚴重失敗：使用 Refresh Token 更新時發生錯誤: {e_token_refresh}")
+            print("   接下來的執行可能會因為 Token 過期而失敗。請檢查您的 Refresh Token 是否有效。")
+
+    elif not config.get('dropbox_token'):
+        print("⚠️ 警告: 未提供 dropbox_token 且無法使用 refresh token。API 可能無法連接 Dropbox。")
+    
+    # 為了安全，不在日誌中印出完整的 config
+    config_to_print = {k: v for k, v in config.items() if 'token' not in k and 'secret' not in k and 'PASSWORD' not in k}
+    print(f"配置已載入 (敏感資訊已隱藏): {config_to_print}")
 load_config()
 
 @app.route('/run_main', methods=['POST'])

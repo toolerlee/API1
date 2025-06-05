@@ -20,7 +20,7 @@ end_date=2025/12/31  # 結束日期
 # Dropbox Settings
 dropbox_app_key=vjxxknfipwukyzs
 dropbox_app_secret=905vcme1i68i3ke
-dropbox_refresh_token=eS5fH8rlRL4AAAAAAAAAAWRwXgPu2zBfWhw4156uqtt-usI5fk8mXD-I9kPDljua
+dropbox_refresh_token=3oC3tEUkH4kAAAAAAAAAAZynwxJdINsFTND_BhYiGuAvzQChRlLJR5U4HClZJ3n_
 dropbox_token= # 可以留空，程式會自動 refresh
 dropbox_folder=/output  # 報表上傳到 Dropbox 的哪個資料夾 (相對於 App Folder)
 dropbox_account_file_path = /account/account.txt # 存放帳號密碼的 txt 檔在 Dropbox 中的完整路徑 (相對於 App Folder)

@@ -10,6 +10,7 @@ import gc # Import garbage collector
 import csv # Import CSV module
 from excel_processing_utils import _create_excel_from_csv_files # Import the new helper function
 import requests # Import requests globally for use in load_config
+import configparser
 
 print("=== Flask API 啟動 ===")
 
@@ -633,74 +634,59 @@ def main_job():
 
 config = {}
 def load_config():
-    global config
-    print("--- DIAGNOSTIC: Entering load_config() ---")
-    import requests
-    default_config = {
-        'mode': 0, 'max_concurrent_accounts': 5, 'start_date': '2024/01/01', 'end_date': '2024/12/31',
-        'thread_start_delay': 0.5, 'max_login_attempts': 2, 'request_delay': 1.0,
-        'max_request_retries': 2, 'retry_delay': 3.0,
-        'dropbox_token': '', 'dropbox_folder': '/output',
-        'dropbox_app_key': '', 'dropbox_app_secret': '', 'dropbox_refresh_token': '',
-        'dropbox_account_file_path': '/Apps/ExcelAPI-app/account/account.txt',
-        'API_ACTION_PASSWORD': 'CHANGEME'
+    """從 config.txt 和環境變數載入設定"""
+    global config, dropbox_app_key, dropbox_app_secret, dropbox_refresh_token, api_action_password, dropbox_account_file_path, dropbox_token
+    
+    # 使用 configparser 讀取 config.txt
+    parser = configparser.ConfigParser()
+    parser.read('config.txt', encoding='utf-8')
+
+    # 優先從環境變數讀取 (改為小寫以匹配 Render 設定)
+    dropbox_app_key = os.getenv('dropbox_app_key') or parser.get('DEFAULT', 'dropbox_app_key', fallback=None)
+    dropbox_app_secret = os.getenv('dropbox_app_secret') or parser.get('DEFAULT', 'dropbox_app_secret', fallback=None)
+    dropbox_refresh_token = os.getenv('dropbox_refresh_token') or parser.get('DEFAULT', 'dropbox_refresh_token', fallback=None)
+    api_action_password = os.getenv('api_action_password') or parser.get('DEFAULT', 'api_action_password', fallback=None)
+    dropbox_account_file_path = os.getenv('dropbox_account_file_path') or parser.get('DEFAULT', 'dropbox_account_file_path', fallback=None)
+    
+    # 將所有設定存儲到一個全域 config 字典中，方便各處使用
+    config = {
+        'dropbox_app_key': dropbox_app_key,
+        'dropbox_app_secret': dropbox_app_secret,
+        'dropbox_refresh_token': dropbox_refresh_token,
+        'api_action_password': api_action_password,
+        'dropbox_account_file_path': dropbox_account_file_path,
+        'dropbox_token': None # 初始化 access token 為 None
     }
     
-    config_path = os.path.abspath('config.txt')
-    print(f"--- DIAGNOSTIC: Attempting to read config from: {config_path} ---")
-    if os.path.exists('config.txt'):
-        print("--- DIAGNOSTIC: config.txt FOUND. Reading file. ---")
-        with open('config.txt', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'): continue
-                if '=' in line:
-                    k, v = line.split('=', 1)
-                    k, v = k.strip(), v.split('#')[0].strip()
-                    config[k] = v
-    else:
-        print("--- DIAGNOSTIC: config.txt NOT FOUND. Using defaults/env_vars only. ---")
+    print("--- 載入設定 ---")
+    print(f"Dropbox App Key: {'已設定' if dropbox_app_key else '未設定'}")
+    print(f"Dropbox App Secret: {'已設定' if dropbox_app_secret else '未設定'}")
+    print(f"Dropbox Refresh Token: {'已設定' if dropbox_refresh_token else '未設定'}")
+    print("------------------")
 
-    for k_default, v_default in default_config.items():
-        if k_default not in config:
-            config[k_default] = v_default
-        else:
-            try:
-                if isinstance(v_default, int): config[k_default] = int(config[k_default])
-                elif isinstance(v_default, float): config[k_default] = float(config[k_default])
-            except ValueError:
-                 print(f"--- WARNING: Could not convert config value for {k_default} to number. Using as string. ---")
-
-
-    print("--- DIAGNOSTIC: Checking for refresh token prerequisites ---")
-    print(f"--- DIAGNOSTIC: dropbox_app_key: {'SET' if config.get('dropbox_app_key') else 'NOT SET'}")
-    print(f"--- DIAGNOSTIC: dropbox_app_secret: {'SET' if config.get('dropbox_app_secret') else 'NOT SET'}")
-    print(f"--- DIAGNOSTIC: dropbox_refresh_token: {'SET' if config.get('dropbox_refresh_token') else 'NOT SET'}")
-
-    if config.get('dropbox_app_key') and config.get('dropbox_app_secret') and config.get('dropbox_refresh_token'):
-        print("--- DIAGNOSTIC: Prerequisites MET. Attempting to refresh token... ---")
+    # 如果有 refresh token，立即換取 access token
+    if dropbox_refresh_token:
         try:
-            resp_token = requests.post(
-                'https://api.dropbox.com/oauth2/token',
-                data={
-                    'grant_type': 'refresh_token',
-                    'refresh_token': config['dropbox_refresh_token'],
-                    'client_id': config['dropbox_app_key'],
-                    'client_secret': config['dropbox_app_secret'],
-                },
-                timeout=15
-            )
-            resp_token.raise_for_status()
-            new_access_token = resp_token.json().get('access_token')
-            if new_access_token:
-                config['dropbox_token'] = new_access_token
-                print("✅ SUCCESS: Refreshed access token.")
-            else:
-                 print("❌ FAILED: Refresh request succeeded but no access token in response.")
-        except Exception as e_token_refresh:
-            print(f"❌ FAILED: Exception during token refresh: {e_token_refresh}")
+            url = "https://api.dropbox.com/oauth2/token"
+            data = {
+                "grant_type": "refresh_token",
+                "refresh_token": dropbox_refresh_token,
+            }
+            auth = (dropbox_app_key, dropbox_app_secret)
+            response = requests.post(url, data=data, auth=auth)
+            response.raise_for_status()  # 如果請求失敗 (例如 401)，會拋出異常
+            new_token = response.json().get("access_token")
+            config['dropbox_token'] = new_token # 更新全域 config 中的 token
+            dropbox_token = new_token # 同時更新舊的全域變數（為了相容性）
+            print("✅ 成功使用 Refresh Token 換取新的 Access Token。")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ 使用 Refresh Token 換取 Access Token 失敗: {e}")
+            if e.response:
+                print(f"    錯誤回應: {e.response.text}")
+            config['dropbox_token'] = None
+            dropbox_token = None
     else:
-        print("--- DIAGNOSTIC: Prerequisites NOT MET. Skipping token refresh. ---")
+        print("⚠️ 警告: 缺少 Dropbox Refresh Token，將無法與 Dropbox 互動。")
 
     config_to_print = {k: v for k, v in config.items() if 'token' not in k and 'secret' not in k and 'PASSWORD' not in k}
     print(f"Configuration loaded (sensitive info hidden): {config_to_print}")

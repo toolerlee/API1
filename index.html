@@ -66,12 +66,17 @@
             margin-right: 0.5rem;
             margin-bottom: 0.5rem;
         }
+        
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.65;
+        }
 
         .btn-primary { color: #fff; background-color: var(--primary-color); border-color: var(--primary-color); }
-        .btn-primary:hover { background-color: var(--primary-hover); border-color: var(--primary-hover); }
+        .btn-primary:hover:not(:disabled) { background-color: var(--primary-hover); border-color: var(--primary-hover); }
 
         .btn-secondary { color: #fff; background-color: var(--secondary-color); border-color: var(--secondary-color); }
-        .btn-secondary:hover { background-color: var(--secondary-hover); border-color: var(--secondary-hover); }
+        .btn-secondary:hover:not(:disabled) { background-color: var(--secondary-hover); border-color: var(--secondary-hover); }
         
         .btn-success { color: #fff; background-color: var(--success-color); border-color: var(--success-color); }
         .btn-danger { color: #fff; background-color: var(--danger-color); border-color: var(--danger-color); }
@@ -128,7 +133,7 @@
         <div class="panel">
             <h1>API 控制面板</h1>
             <button class="btn-primary" onclick="runMain()">執行主要任務</button>
-            <button class="btn-secondary" onclick="getStatus()">手動檢查狀態</button>
+            <button id="manualCheckBtn" class="btn-secondary" onclick="manualCheck()">手動檢查狀態</button>
             <textarea id="statusResult" readonly placeholder="任務狀態將會顯示在這裡..."></textarea>
         </div>
 
@@ -171,8 +176,24 @@
                 });
         }
 
+        function manualCheck() {
+            const btn = document.getElementById('manualCheckBtn');
+            const originalText = btn.textContent;
+            btn.textContent = '檢查中...';
+            btn.disabled = true;
+
+            // getStatus returns a promise, so we can use .finally()
+            getStatus().finally(() => {
+                setTimeout(() => { // Add a small delay so the "checking" text is readable
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 300);
+            });
+        }
+        
         function getStatus() {
-            fetch('/status')
+            // Return the fetch promise so other functions can know when it's done
+            return fetch('/status')
                 .then(response => response.json())
                 .then(data => {
                     let statusText = `進度: ${data.progress}\n\n`;
@@ -191,6 +212,7 @@
                     console.error('Error:', error);
                     document.getElementById('statusResult').value = '獲取狀態時發生錯誤。';
                     if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
+                    throw error; // Re-throw error to ensure promise chain is rejected
                 });
         }
 

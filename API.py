@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 import threading
 import dropbox
 import os
@@ -9,6 +9,7 @@ from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
 import gc # Import garbage collector
 import csv # Import CSV module
 from excel_processing_utils import _create_excel_from_csv_files # Import the new helper function
+import requests # Import requests globally for use in load_config
 
 print("=== Flask API 啟動 ===")
 
@@ -90,11 +91,6 @@ def main_job():
         return
 
     # --- Start of functions copied and adapted from Auto.py (HELPER FUNCTIONS) ---
-    # ... (is_number_value, apply_formatting_to_cell, copy_cell_format_for_api, sort_sheets_by_gold_level_in_api) ...
-    # ... (_internal_generate_bonus2_report, _internal_split_bonus2_sheets) ...
-    # ... (get_random_ua, DEBUG definition) ...
-    # These helper functions remain the same.
-    # Make sure global_color_map_for_reports and global_thin_border_for_reports are defined if used by them.
     global_color_map_for_reports = {
         "紅利積分": "FF0000", "電子錢包": "00008B", "獎金暫存": "8B4513",
         "註冊分": "FF8C00", "商品券": "2F4F4F", "星級": "708090"
@@ -134,16 +130,12 @@ def main_job():
         return sorted(sheet_names_list, key=get_sheet_order_key)
 
     def _internal_generate_bonus2_report(source_bonus_xlsx_path, output_bonus2_xlsx_path):
-        # ... (This function's internal logic remains the same) ...
-        # Make sure it uses `result_log.append` for logging
         result_log.append(f"內部函數：開始生成 Bonus2.xlsx 從 {source_bonus_xlsx_path}")
         try:
             if not os.path.exists(source_bonus_xlsx_path):
                 result_log.append(f"❌ 錯誤: 來源 bonus.xlsx '{source_bonus_xlsx_path}' 不存在。")
                 return False
             wb_source = openpyxl.load_workbook(source_bonus_xlsx_path, data_only=True)
-            # ... (rest of the function) ...
-            # Ensure it has its own try-except and memory optimization
             wb_target = openpyxl.Workbook()
             if 'Sheet' in wb_target.sheetnames: wb_target.remove(wb_target.active)
             person_sheets_map = defaultdict(list)
@@ -262,7 +254,6 @@ def main_job():
             result_log.append(f"❌ 生成 Bonus2.xlsx 時發生錯誤: {str(e_gen_b2)}"); print(f"PYTHON_ERROR in _internal_generate_bonus2_report: {e_gen_b2}"); import traceback; traceback.print_exc(); return False
 
     def _internal_split_bonus2_sheets(bonus2_xlsx_path, output_directory_for_split_files):
-        # ... (This function's internal logic remains the same) ...
         result_log.append(f"內部函數：開始分割 Bonus2.xlsx 從 {bonus2_xlsx_path} 到目錄 {output_directory_for_split_files}")
         split_files_generated_paths = []
         try:
@@ -275,8 +266,8 @@ def main_job():
                 if new_wb_for_sheet.sheetnames[0] == 'Sheet': new_wb_for_sheet.remove(new_wb_for_sheet.active)
                 source_sheet_obj = workbook_to_split[sheet_name_to_split]
                 target_sheet_in_new_wb = new_wb_for_sheet.create_sheet(title=sheet_name_to_split)
-                for col_letter, dim in source_sheet_obj.column_dimensions.items(): target_sheet_in_new_wb.column_dimensions[col_letter].width = dim.width # etc.
-                for row_idx, dim in source_sheet_obj.row_dimensions.items(): target_sheet_in_new_wb.row_dimensions[row_idx].height = dim.height # etc.
+                for col_letter, dim in source_sheet_obj.column_dimensions.items(): target_sheet_in_new_wb.column_dimensions[col_letter].width = dim.width
+                for row_idx, dim in source_sheet_obj.row_dimensions.items(): target_sheet_in_new_wb.row_dimensions[row_idx].height = dim.height
                 for row in source_sheet_obj.iter_rows():
                     for cell in row:
                         new_cell = target_sheet_in_new_wb[cell.coordinate]; new_cell.value = cell.value
@@ -290,15 +281,11 @@ def main_job():
         except Exception as e_split_b2:
             result_log.append(f"❌ 分割 Bonus2.xlsx 時發生錯誤: {str(e_split_b2)}"); print(f"PYTHON_ERROR in _internal_split_bonus2_sheets: {e_split_b2}"); import traceback; traceback.print_exc(); return []
 
-    def get_random_ua(): # This helper function is fine
+    def get_random_ua():
         uas = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',]
         return random.choice(uas)
-    DEBUG = False # This is fine
+    DEBUG = False
 
-    # --- CONFIGURATION LOADING (main_job specific, ensure it reflects global config) ---
-    # `config` should be the global dictionary already loaded.
-    # If not, it needs to be loaded here or passed to main_job.
-    # For now, assume `config` is the global dictionary.
     max_concurrent_accounts = int(config.get('max_concurrent_accounts', 30))
     start_date = config.get('start_date', '2025/01/01')
     end_date = config.get('end_date', '2025/12/31')
@@ -307,11 +294,8 @@ def main_job():
     request_delay = float(config.get('request_delay', 2.0))
     max_request_retries = int(config.get('max_request_retries', 3))
     retry_delay = float(config.get('retry_delay', 3.0))
-    dropbox_folder_for_output = config.get('dropbox_folder', '/output') # Renamed for clarity
-    # dropbox_token is already current_dropbox_token
-    # dropbox_account_file_path is already dropbox_account_file_path_config
+    dropbox_folder_for_output = config.get('dropbox_folder', '/output')
     
-    # --- NEW: Load accounts from Dropbox ---
     accounts = []
     result_log.append(f"準備從 Dropbox 讀取帳號列表: {dropbox_account_file_path_config}")
     if not current_dropbox_token:
@@ -333,7 +317,7 @@ def main_job():
             for i in range(0, len(lines), 3):
                 if i + 2 < len(lines):
                     name = lines[i]
-                    acc = lines[i+1] # Renamed to avoid conflict with ACCOUNT parameter in fetch_account_data
+                    acc = lines[i+1]
                     password = lines[i+2]
                     accounts.append((name, acc, password))
             result_log.append(f"✅ 成功從 Dropbox ({dropbox_account_file_path_config}) 讀取並解析了 {len(accounts)} 個帳號。")
@@ -358,88 +342,69 @@ def main_job():
         result_log.append('帳號列表為空。請確保 Dropbox 上的帳號檔案有內容且格式正確。')
         status["result"] = '\\n'.join(result_log)
         status["progress"] = "錯誤: 帳號列表為空"
-        # Do not set running to False here if we want to allow an empty account list to "complete" without error
-        # For now, let's consider it an error if no accounts to process, and stop.
         status["running"] = False
         return '\\n'.join(result_log)
     
-    # --- End of new account loading logic ---
-
-    # --- The rest of main_job (ThreadPoolExecutor, report generation, Dropbox upload of results) ---
-    # This part uses the `accounts` list populated from Dropbox.
-    # Ensure variable names for account username/password in the loop match what's in `accounts` tuple.
-    # Example: for idx, (name, ACCOUNT_USER, PASSWORD_USER) in enumerate(accounts, 1):
-    #            futures.append(executor.submit(fetch_account_data_and_save_to_csv, name, ACCOUNT_USER, PASSWORD_USER, ...))
-
-    all_data_lock = threading.Lock() # Should be fine
-    log_folder = os.path.join('logs', datetime.now().strftime('%Y%m%d_%H%M')) # For retry/fail logs
+    all_data_lock = threading.Lock()
+    log_folder = os.path.join('logs', datetime.now().strftime('%Y%m%d_%H%M'))
     os.makedirs(log_folder, exist_ok=True)
-    retry_log_path = os.path.join(log_folder, 'retry.txt') # These might become less relevant if accounts always from Dropbox
+    retry_log_path = os.path.join(log_folder, 'retry.txt')
     fail_log_path = os.path.join(log_folder, 'fail_log.txt')
 
-    # --- make_request function (should be fine) ---
     def make_request(session, url, method='get', headers=None, data=None, retry_count=0):
-        # ... (definition of make_request) ...
         if headers is None: headers = {}
         headers['User-Agent'] = get_random_ua()
-        time.sleep(request_delay) # request_delay should be from config
+        time.sleep(request_delay)
         try:
-            if method.lower() == 'get': resp = session.get(url, headers=headers, timeout=20) # Added timeout
-            else: resp = session.post(url, headers=headers, data=data, timeout=20) # Added timeout
+            if method.lower() == 'get': resp = session.get(url, headers=headers, timeout=20)
+            else: resp = session.post(url, headers=headers, data=data, timeout=20)
             if resp.status_code == 200: return resp
-            if retry_count < max_request_retries: # max_request_retries from config
-                time.sleep(retry_delay) # retry_delay from config
+            if retry_count < max_request_retries:
+                time.sleep(retry_delay)
                 return make_request(session, url, method, headers, data, retry_count+1)
-            resp.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx) after retries
-        except requests.exceptions.RequestException as e_req_make: # Catch specific request exceptions
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as e_req_make:
             if retry_count < max_request_retries:
                 time.sleep(retry_delay)
                 return make_request(session, url, method, headers, data, retry_count+1)
             raise Exception(f"請求 {url} 最終失敗 ({type(e_req_make).__name__}): {e_req_make}") from e_req_make
 
-
-    # --- fetch_account_data_and_save_to_csv function ---
-    # Ensure the parameters are (name, ACCOUNT, PASSWORD, ocr, current_output_dir, headers_for_file)
-    # ACCOUNT and PASSWORD here are from the tuple in the `accounts` list.
     def fetch_account_data_and_save_to_csv(name, user_account_id, user_password, ocr, current_output_dir, headers_for_file):
-        # ... (The entire body of fetch_account_data_and_save_to_csv) ...
-        # Make sure it uses user_account_id and user_password for login, not global ACCOUNT/PASSWORD.
-        # It should return: name, user_account_id, csv_saved_boolean, num_rows
-        # This function's internal logic for scraping, CSV saving, and the outer try-except wrapper remains as previously refined.
-        # Example of parameter usage inside: data["MemberLogin1$txtAccound"] = user_account_id
         try:
             thread_id = threading.get_ident()
             def log_detail(message):
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                 print(f"[{timestamp}] [Thread-{thread_id}] [Acc: {name}] {message}")
             log_detail("處理開始")
-            # ... (rest of the function as it was, ensuring ACCOUNT becomes user_account_id, PASSWORD becomes user_password)
-            # Ensure the final return is: return name, user_account_id, save_successful, num_data_rows
+            
             process_start_time = time.time()
             login_successful = False
             actual_login_attempts = 0
             ocr_total_classification_time_for_account = 0.0
-            for attempt in range(1, max_login_attempts + 1): # max_login_attempts from config
+            
+            for attempt in range(1, max_login_attempts + 1):
                 actual_login_attempts = attempt
                 session = requests.Session()
                 log_detail(f"登入嘗試 {attempt}/{max_login_attempts} - 開始")
-                # ... login logic using user_account_id, user_password ...
-                # ... error handling for login, including retry_log_path, fail_log_path ...
-                # ... if login fails after max_attempts, raise Exception ...
+                
                 current_login_url = "https://member.star-rich.net/login"
                 current_headers = {"Referer": current_login_url}
                 resp_page = make_request(session, current_login_url, headers=current_headers)
                 soup_login = BeautifulSoup(resp_page.text, "html.parser")
-                # ... (captcha logic using ocr_instance) ...
+                
                 img_tag = soup_login.find("img", {"id": "MemberLogin1_Image1"})
-                if not img_tag or not img_tag.get("src"): # Simplified error path
+                if not img_tag or not img_tag.get("src"):
                     log_detail(f"登入嘗試 {attempt}: 找不到驗證碼圖片。"); time.sleep(retry_delay); continue
+                
                 img_url = "https://member.star-rich.net/" + img_tag["src"]
                 img_resp = make_request(session, img_url, headers=current_headers)
                 img_bytes = img_resp.content
                 login_code = ocr.classification(img_bytes)
-                if not login_code: log_detail(f"登入嘗試 {attempt}: OCR 未返回驗證碼。"); time.sleep(retry_delay); continue
-                if login_code[-1] == '4': log_detail(f"登入嘗試 {attempt}: 驗證碼 {login_code} 以4結尾。"); time.sleep(retry_delay); continue
+
+                if not login_code: 
+                    log_detail(f"登入嘗試 {attempt}: OCR 未返回驗證碼。"); time.sleep(retry_delay); continue
+                if login_code[-1] == '4': 
+                    log_detail(f"登入嘗試 {attempt}: 驗證碼 {login_code} 以4結尾。"); time.sleep(retry_delay); continue
                 
                 login_data = { inp.get("name"): inp.get("value", "") for inp in soup_login.find_all("input") if inp.get("name") }
                 login_data.update({
@@ -449,23 +414,22 @@ def main_job():
                     "__EVENTTARGET": "MemberLogin1$lkbSignIn", "__EVENTARGUMENT": ""
                 })
                 login_resp = make_request(session, current_login_url, method='post', headers=current_headers, data=login_data)
-                if "登出" in login_resp.text or "歡迎" in login_resp.text: login_successful = True; break
-                log_detail(f"登入嘗試 {attempt} 失敗。") # Add more specific error detection if possible
-                time.sleep(retry_delay) # retry_delay from config
+                if "登出" in login_resp.text or "歡迎" in login_resp.text: 
+                    login_successful = True
+                    break
+                log_detail(f"登入嘗試 {attempt} 失敗。")
+                time.sleep(retry_delay)
 
             if not login_successful:
                 log_detail(f"帳號 {name} ({user_account_id}) 連續 {actual_login_attempts} 次登入失敗。")
-                # Append to retry/fail logs if needed, though primary account source is now Dropbox
                 with open(retry_log_path, 'a', encoding='utf-8') as retry_f: retry_f.write(f"{name}\\n{user_account_id}\\n{user_password}\\n")
                 with open(fail_log_path, 'a', encoding='utf-8') as fail_f: fail_f.write(f"{name}_{user_account_id} 連續{actual_login_attempts}次登入失敗\\n")
                 raise Exception(f"帳號 {name} ({user_account_id}) 登入失敗")
 
-            # ... (data scraping logic: home_resp, member_resp, bonus_history_resp etc.) ...
-            # ... (This part should remain largely the same, ensure it uses the established `session`)
             home_url = "https://member.star-rich.net/default"; home_resp = make_request(session, home_url, headers=current_headers)
             home_soup = BeautifulSoup(home_resp.text, "html.parser"); h4s = home_soup.select(".h4")
-            extra_data_home = [h.text.strip() for h in h4s[:5]] # bonus_point to item4
-            while len(extra_data_home) < 5: extra_data_home.append("") # Ensure 5 elements
+            extra_data_home = [h.text.strip() for h in h4s[:5]]
+            while len(extra_data_home) < 5: extra_data_home.append("")
             star_level_tag = home_soup.select_one("#ctl00_cphPageInner_Label_Pin")
             extra_data_home.append(star_level_tag.text.strip() if star_level_tag else "")
 
@@ -475,39 +439,34 @@ def main_job():
             right_count_tag = member_soup.select_one("#ctl00_cphPageInner_cphContent_Label_RightCount")
             extra_data_counts = [left_count_tag.text.strip() if left_count_tag else "", right_count_tag.text.strip() if right_count_tag else ""]
             
-            all_extra_data_for_row = extra_data_home + extra_data_counts # Should be 5 + 1 + 2 = 8 elements
+            all_extra_data_for_row = extra_data_home + extra_data_counts
 
             bonus_history_url = "https://member.star-rich.net/bonushistory"
             resp_bonus_init = make_request(session, bonus_history_url, headers=current_headers)
             soup_bonus_init = BeautifulSoup(resp_bonus_init.text, "html.parser")
-            # ... (Extract viewstate, eventvalidation, viewstategen for bonus history form) ...
             viewstate = soup_bonus_init.find("input", {"name": "__VIEWSTATE"})["value"]
             eventvalidation = soup_bonus_init.find("input", {"name": "__EVENTVALIDATION"})["value"]
             viewstategen = soup_bonus_init.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"]
             form_data_bonus_hist = {
                 "__EVENTTARGET": "ctl00$cphPageInner$cphContent$Button_Enter", "__EVENTARGUMENT": "",
                 "__VIEWSTATE": viewstate, "__VIEWSTATEGENERATOR": viewstategen, "__EVENTVALIDATION": eventvalidation,
-                "ctl00$cphPageInner$cphContent$txtStartDate": start_date, # start_date from config
-                "ctl00$cphPageInner$cphContent$txtEndDate": end_date, # end_date from config
+                "ctl00$cphPageInner$cphContent$txtStartDate": start_date,
+                "ctl00$cphPageInner$cphContent$txtEndDate": end_date,
             }
             response_bonus_page = make_request(session, bonus_history_url, method='post', headers=current_headers, data=form_data_bonus_hist)
             current_bonus_soup = BeautifulSoup(response_bonus_page.text, "html.parser")
             account_all_data_rows = []
-            # ... (Loop for bonus history pages, extracting table data) ...
             first_data_row_processed = False
-            while True: # Loop through pages of bonus history
-                target_table = None # Find the correct table
+            while True:
+                target_table = None
                 for tbl_iter in current_bonus_soup.find_all("table"):
                     if any("獎金" in th.get_text(strip=True) for th in tbl_iter.find_all("th")): target_table = tbl_iter; break
-                if not target_table: break # No more tables or data
+                if not target_table: break
                 for tr_idx, tr_iter in enumerate(target_table.find_all("tr")):
-                    if tr_idx == 0: continue # Skip header row
+                    if tr_idx == 0: continue
                     cols = [td.get_text(strip=True) for td in tr_iter.find_all("td")]
                     if cols and "總計" not in cols[0]:
-                        # Original cols[:-1] are 16 bonus items. Headers are 24.
-                        # So, bonus data + extra_data should match headers_for_file.
-                        # headers_for_file[:16] are bonus items. headers_for_file[16:] are the 8 extra_data items.
-                        bonus_data_part = cols[:-1] # These are the first 16 columns
+                        bonus_data_part = cols[:-1]
                         if not first_data_row_processed:
                              full_row = bonus_data_part + all_extra_data_for_row
                              first_data_row_processed = True
@@ -516,8 +475,7 @@ def main_job():
                         account_all_data_rows.append(full_row)
                 
                 next_btn = current_bonus_soup.find(id="ctl00_cphPageInner$cphContent$hpl_Forward")
-                if not next_btn or 'disabled' in next_btn.attrs.get('class', []): break # No next page
-                # Prepare form data for next page...
+                if not next_btn or 'disabled' in next_btn.attrs.get('class', []): break
                 viewstate_next = current_bonus_soup.find("input", {"name": "__VIEWSTATE"})["value"]
                 eventvalidation_next = current_bonus_soup.find("input", {"name": "__EVENTVALIDATION"})["value"]
                 viewstategen_next = current_bonus_soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"]
@@ -530,19 +488,18 @@ def main_job():
                 response_bonus_page = make_request(session, bonus_history_url, method='post', headers=current_headers, data=form_data_bonus_next)
                 current_bonus_soup = BeautifulSoup(response_bonus_page.text, "html.parser")
 
-            if not account_all_data_rows and first_data_row_processed == False: # No transactions, but logged in
+            if not account_all_data_rows and first_data_row_processed == False:
                  blank_bonus_part = [""] * (len(headers_for_file) - len(all_extra_data_for_row))
                  account_all_data_rows.append(blank_bonus_part + all_extra_data_for_row)
                  log_detail("無交易紀錄，但已記錄主頁統計數據。")
             
-            # --- CSV Saving ---
-            csv_file_name = f"{name}_{user_account_id}.csv" # Use user_account_id
+            csv_file_name = f"{name}_{user_account_id}.csv"
             csv_file_path = os.path.join(current_output_dir, csv_file_name)
             save_successful_csv = False
             try:
                 with open(csv_file_path, 'w', newline='', encoding='utf-8-sig') as cf:
                     writer = csv.writer(cf)
-                    writer.writerow(headers_for_file) # headers_for_file from main_job scope
+                    writer.writerow(headers_for_file)
                     if account_all_data_rows: writer.writerows(account_all_data_rows)
                 log_detail(f"CSV 儲存成功: {csv_file_path} ({len(account_all_data_rows)} 行)")
                 save_successful_csv = True
@@ -552,25 +509,23 @@ def main_job():
             log_detail(f"帳號 {name} ({user_account_id}) 處理完成。")
             return name, user_account_id, save_successful_csv, len(account_all_data_rows) if account_all_data_rows else 0
 
-        except Exception as e_fetch_outer: # Outer try-except for the whole fetch function
+        except Exception as e_fetch_outer:
             log_detail(f"[CRITICAL WRAPPER] fetch_account_data_and_save_to_csv 發生未處理錯誤: {e_fetch_outer}")
-            # import traceback; traceback.print_exc() # Uncomment for detailed stack trace in logs
-            raise # Re-raise to be caught by as_completed loop
+            raise
 
-    # ThreadPoolExecutor part
     total_accounts = len(accounts)
     success_count = 0
-    failed_accounts_info = [] # Store more info like (name, id, error_message)
+    failed_accounts_info = []
     
-    csv_generation_success_details = [] # Store (name, id, num_rows)
-    csv_generation_failed_details = []  # Store (name, id, reason)
+    csv_generation_success_details = []
+    csv_generation_failed_details = []
 
     if total_accounts > 0:
         with ThreadPoolExecutor(max_workers=max_concurrent_accounts) as executor:
             futures = []
-            for idx, (name_acc, user_id_acc, pass_acc) in enumerate(accounts, 1): # Use new variable names
+            for idx, (name_acc, user_id_acc, pass_acc) in enumerate(accounts, 1):
                 futures.append(executor.submit(fetch_account_data_and_save_to_csv, name_acc, user_id_acc, pass_acc, ocr_instance, output_dir, headers_for_csv_and_excel))
-                time.sleep(thread_start_delay) # thread_start_delay from config
+                time.sleep(thread_start_delay)
             
             completed_count_threads = 0
             for future in as_completed(futures):
@@ -580,30 +535,20 @@ def main_job():
                         success_count += 1
                         csv_generation_success_details.append({'name': acc_name_res, 'id': acc_id_res, 'rows': num_rows_res})
                         result_log.append(f"帳號 {acc_name_res}_{acc_id_res} CSV 資料儲存成功 ({num_rows_res} 行)。")
-                    else: # CSV saving reported as False by the function itself
+                    else:
                         csv_generation_failed_details.append({'name': acc_name_res, 'id': acc_id_res, 'reason': 'CSV儲存標記為失敗'})
                         result_log.append(f"帳號 {acc_name_res}_{acc_id_res} CSV 資料儲存失敗 (由函數回報)。")
                         failed_accounts_info.append(f"{acc_name_res}_{acc_id_res} (CSV儲存失敗)")
-
-
-                except Exception as e_future: # Exception from fetch_account_data_and_save_to_csv
-                    # Try to get account name/id if possible, e.g. if the exception message contains it.
-                    # This part is tricky as the future might not easily give back its original arguments.
-                    # The exception 'e_future' itself might contain the account name if we format it well in fetch_account_data
+                except Exception as e_future:
                     msg_future = str(e_future)
-                    failed_accounts_info.append(msg_future) # Store the error message
+                    failed_accounts_info.append(msg_future)
                     result_log.append(f"[錯誤] 執行緒處理時發生錯誤: {msg_future}")
                 finally:
                     completed_count_threads += 1
                     status["progress"] = f"CSV處理中: {completed_count_threads}/{total_accounts} (成功儲存CSV: {success_count})"
-    else: # No accounts to process
+    else:
         result_log.append("無帳號可處理 (從 Dropbox 讀取的列表為空)。")
         status["progress"] = "完成 (0/0)"
-
-
-    # ... (rest of main_job: _create_excel_from_csv_files, Bonus2 generation, splitting, Dropbox upload of reports)
-    # This part should mostly remain the same.
-    # Ensure dropbox_folder_for_output is used for uploading reports, not the account file path.
 
     excel_file_path_local = None
     if success_count > 0:
@@ -628,19 +573,16 @@ def main_job():
             result_log.append(f"錯誤或警告: Bonus2.xlsx 未能成功生成。跳過分割。"); bonus2_file_path_local = None
     else: result_log.append("錯誤: 主要 bonus.xlsx 不存在，無法生成 Bonus2.xlsx。")
 
-    # --- Dropbox upload of generated reports ---
-    # ... (This section for uploading bonus.xlsx, Bonus2.xlsx, and split files remains, using `current_dropbox_token` and `dropbox_folder_for_output`)
-    # Ensure folder_name (YYYYMMDD_HHMM) is used for the subfolder on Dropbox for reports.
     dropbox_status_msg_for_summary = ""
     uploaded_count_for_summary = 0
     upload_errors_for_summary = 0
     if current_dropbox_token:
         try:
-            dbx_reports = dropbox.Dropbox(current_dropbox_token) # Use a clear variable if needed
+            dbx_reports = dropbox.Dropbox(current_dropbox_token)
             all_files_to_upload_reports = [f for f in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.xlsx')]
             
-            base_dropbox_folder_reports = dropbox_folder_for_output.rstrip('/') # Use the config for reports output
-            dropbox_target_run_folder_reports = f"{base_dropbox_folder_reports}/{folder_name}" # folder_name is YYYYMMDD_HHMM
+            base_dropbox_folder_reports = dropbox_folder_for_output.rstrip('/')
+            dropbox_target_run_folder_reports = f"{base_dropbox_folder_reports}/{folder_name}"
 
             if all_files_to_upload_reports:
                 for f_report in all_files_to_upload_reports:
@@ -654,69 +596,53 @@ def main_job():
                     except Exception as e_dbx_report_upload:
                         result_log.append(f"  ❌ 上傳報表 {f_report} 到 Dropbox 失敗: {e_dbx_report_upload}")
                         upload_errors_for_summary +=1
-                # ... (Update dropbox_status_msg_for_summary based on these counts) ...
                 if uploaded_count_for_summary > 0 and upload_errors_for_summary == 0: dropbox_status_msg_for_summary = f"Dropbox報表: ✅ 所有 {uploaded_count_for_summary} 個已上傳到 {dropbox_target_run_folder_reports}"
-                # ... other conditions for dropbox_status_msg_for_summary ...
             else: dropbox_status_msg_for_summary = f"Dropbox報表: ⚠️ {output_dir} 中無 .xlsx 報表可上傳 (目標: {dropbox_target_run_folder_reports})"
         except Exception as e_dbx_reports_generic: dropbox_status_msg_for_summary = f"Dropbox報表: ❌ 連接或操作時發生錯誤 - {str(e_dbx_reports_generic)}"
     else: dropbox_status_msg_for_summary = "Dropbox報表: ⚠️ Token未設定，跳過上傳"
 
-
-    # --- Final summary ---
     final_summary_lines = []
     final_summary_lines.append(f"帳號處理成功: {success_count} / {total_accounts if total_accounts > 0 else 'N/A'}")
     if failed_accounts_info:
         final_summary_lines.append(f"帳號處理失敗: {len(failed_accounts_info)}")
         final_summary_lines.append("失敗詳情 (部分):")
-        for fail_msg in failed_accounts_info[:5]: # Show first 5 errors
+        for fail_msg in failed_accounts_info[:5]:
             final_summary_lines.append(f"  - {fail_msg}")
     else:
         final_summary_lines.append("帳號處理失敗: 0")
     
     if dropbox_status_msg_for_summary: final_summary_lines.append(dropbox_status_msg_for_summary)
-    # ... (Add total time) ...
-    end_time = time.time()
-    # ... (Calculate hours, minutes, seconds for total_time_job = end_time - main_start_time) ...
-    # Need main_start_time defined at the beginning of main_job's try block.
-    # For now, just log `result_log`.
     
-    status["result"] = '\\n'.join(final_summary_lines + result_log[-10:]) # Show summary and last 10 detailed logs
+    status["result"] = '\\n'.join(final_summary_lines + result_log[-10:])
     status["progress"] = f"完成: {completed_count_threads if total_accounts > 0 else 0}/{total_accounts if total_accounts > 0 else 0} (成功: {success_count})"
     
     print("main_job 執行完畢.")
 
-    # except Exception as e_main_job: (ensure main_job has its own outer try-except)
-    # ... error logging ...
-    # finally: status["running"] = False
-    # return '\\n'.join(result_log)
     try:
-        # ... (all of main_job's primary logic as above) ...
-        pass # Placeholder for the main logic block
+        pass
     except Exception as e_main_job_outer:
         error_message_main = f"main_job 執行時發生頂層錯誤: {str(e_main_job_outer)}"
         print(error_message_main)
         result_log.append(error_message_main)
-        # import traceback; result_log.append(traceback.format_exc()) # For detailed stack trace
         status["result"] = '\\n'.join(result_log)
         status["progress"] = "發生嚴重錯誤，請查看日誌"
     finally:
         status["running"] = False
         print("main_job 執行緒結束 (無論成功或失敗)")
-    return '\\n'.join(result_log) # Return all logs
+    return '\\n'.join(result_log)
 
-# --- Global Config Loading (should happen once at app start) ---
 config = {}
 def load_config():
     global config
-    import requests # <-- ADD IMPORT HERE
+    import requests
     default_config = {
         'mode': 0, 'max_concurrent_accounts': 5, 'start_date': '2024/01/01', 'end_date': '2024/12/31',
         'thread_start_delay': 0.5, 'max_login_attempts': 2, 'request_delay': 1.0,
         'max_request_retries': 2, 'retry_delay': 3.0,
-        'dropbox_token': '', 'dropbox_folder': '/output', # This is for report outputs
+        'dropbox_token': '', 'dropbox_folder': '/output',
         'dropbox_app_key': '', 'dropbox_app_secret': '', 'dropbox_refresh_token': '',
-        'dropbox_account_file_path': '/Apps/ExcelAPI-app/account/account.txt', # Default path for account file
-        'API_ACTION_PASSWORD': 'CHANGEME' # Default password, user should change
+        'dropbox_account_file_path': '/Apps/ExcelAPI-app/account/account.txt',
+        'API_ACTION_PASSWORD': 'CHANGEME'
     }
     if os.path.exists('config.txt'):
         with open('config.txt', 'r', encoding='utf-8') as f:
@@ -726,21 +652,18 @@ def load_config():
                 if '=' in line:
                     k, v = line.split('=', 1)
                     k, v = k.strip(), v.split('#')[0].strip()
-                    if k in default_config: # Check against default_config keys
+                    if k in default_config:
                         if isinstance(default_config[k], int): config[k] = int(v)
                         elif isinstance(default_config[k], float): config[k] = float(v)
                         else: config[k] = v
-                    else: # Allow new keys not in default_config (e.g. if user adds custom ones)
+                    else:
                         config[k] = v
-    # Ensure all default keys are present in config, using default value if not in file
     for k_default, v_default in default_config.items():
         if k_default not in config:
             config[k_default] = v_default
     
-    # Handle Dropbox token refresh if necessary (this logic was already present)
     if not config.get('dropbox_token') and config.get('dropbox_app_key') and config.get('dropbox_app_secret') and config.get('dropbox_refresh_token'):
-        # ... (get_access_token_from_refresh logic as before) ...
-        def get_access_token_from_refresh_global(): # Make it distinct or pass config
+        def get_access_token_from_refresh_global():
             try:
                 resp_token = requests.post(
                     'https://api.dropbox.com/oauth2/token',
@@ -762,12 +685,10 @@ def load_config():
         else:
             print("❌ 無法自動取得 Dropbox access token (global load)，請檢查 refresh token 設定")
 
-    print(f"配置已載入: {config}") # Log loaded config
-load_config() # Load config at app startup
+    print(f"配置已載入: {config}")
+load_config()
 
 @app.route('/run_main', methods=['POST'])
-# ... (run_main remains the same, it uses the global `config` implicitly via `main_job`)
-# ... unchanged ...
 def run_main():
     print("收到 /run_main 請求")
     if status["running"]:
@@ -777,30 +698,24 @@ def run_main():
     status["result"] = "初始化中，準備開始執行主要腳本..."
     status["progress"] = "初始化中..."
     print("準備啟動新 thread 執行 main_job")
-    thread = threading.Thread(target=main_job) # main_job will use global config
+    thread = threading.Thread(target=main_job)
     thread.start()
     print("已啟動新 thread 執行 main_job")
     return jsonify({"status": "started", "message": "主要腳本已啟動執行。請稍後透過 /status 檢查進度。"})
 
 @app.route('/status', methods=['GET'])
-# ... (get_status remains the same) ...
-# ... unchanged ...
 def get_status():
     print(f"[STATUS_ENDPOINT] 目前的 status 字典是: {status}")
     return jsonify(status)
 
 @app.route('/')
-# ... (serve_index remains the same) ...
-# ... unchanged ...
 def serve_index():
     return send_from_directory('.', 'index.html')
 
-# --- NEW API Endpoints for Account File Management ---
 @app.route('/api/account_file', methods=['GET', 'POST'])
 def manage_account_file():
-    global config # Access the global config
-    # Ensure necessary Dropbox config is available
-    api_password = config.get('API_ACTION_PASSWORD', 'CHANGEME_IF_NOT_SET_IN_CONFIG') # Fallback if key missing
+    global config
+    api_password = config.get('API_ACTION_PASSWORD', 'CHANGEME_IF_NOT_SET_IN_CONFIG')
     token = config.get('dropbox_token')
     account_file_dbx_path = config.get('dropbox_account_file_path')
 
@@ -816,15 +731,14 @@ def manage_account_file():
             user_password = data.get('password')
             account_data_content = data.get('account_data')
 
-            if not user_password or account_data_content is None: # account_data can be empty string
+            if user_password is None or account_data_content is None:
                 return jsonify({"error": "請求中缺少 'password' 或 'account_data' 欄位"}), 400
 
             if user_password != api_password:
-                return jsonify({"error": "密碼錯誤"}), 403 # Forbidden
+                return jsonify({"error": "密碼錯誤"}), 403
 
             dbx = dropbox.Dropbox(token)
             try:
-                # Encode account_data to bytes for upload
                 file_bytes = account_data_content.encode('utf-8')
                 dbx.files_upload(file_bytes, account_file_dbx_path, mode=dropbox.files.WriteMode.overwrite)
                 print(f"帳號檔案已成功上傳到 Dropbox: {account_file_dbx_path}")
@@ -838,7 +752,6 @@ def manage_account_file():
         except Exception as e_json:
             return jsonify({"error": f"處理請求時發生錯誤: {str(e_json)}"}), 400
 
-
     elif request.method == 'GET':
         user_password_query = request.args.get('password')
         if not user_password_query:
@@ -851,31 +764,11 @@ def manage_account_file():
         try:
             _, res = dbx.files_download(path=account_file_dbx_path)
             account_file_content_bytes = res.content
-            # Send as a file download
-            return send_from_directory(
-                directory='.', # Dummy, not used as we provide content directly
-                path='account.txt', # Suggested filename for download
-                mimetype='text/plain',
-                as_attachment=True,
-                attachment_filename='account.txt', # For Flask 2.0+ use download_name
-                # For older Flask, you might need a BytesIO wrapper for send_file
-                # from io import BytesIO
-                # return send_file(BytesIO(account_file_content_bytes), mimetype='text/plain', as_attachment=True, download_name='account.txt')
-                response_class=lambda r, s, h: app.response_class(r, status=s, headers=h), # Hack to make it work with string content
-                environ=request.environ # For Flask to construct response
-            )
-            # For modern Flask (send_file with BytesIO is more robust):
-            # from io import BytesIO
-            # return send_file(BytesIO(account_file_content_bytes), mimetype='text/plain', download_name='account.txt', as_attachment=True)
-            # The above send_from_directory is a bit of a hack for direct content.
-            # A more robust way for direct content without an actual file:
-            from flask import Response
             return Response(
                 account_file_content_bytes,
                 mimetype="text/plain",
                 headers={"Content-disposition": "attachment; filename=account.txt"}
             )
-
         except dropbox.exceptions.ApiError as e:
             if isinstance(e.error, dropbox.files.DownloadError) and e.error.is_path():
                  print(f"Dropbox API 錯誤 (下載帳號檔): 找不到檔案或路徑錯誤 {account_file_dbx_path} - {e}")
@@ -887,9 +780,6 @@ def manage_account_file():
             return jsonify({"error": f"下載時發生內部錯誤: {str(e_download)}"}), 500
 
 if __name__ == '__main__':
-# ... (main app run remains the same) ...
-# ... unchanged ...
     print("=== 進入 __main__ 啟動 Flask ===")
-    # load_config() # Config is now loaded globally when script is imported/run
-    port = int(os.environ.get("PORT", int(config.get("FLASK_PORT", 5000)))) # Use config for port too
+    port = int(os.environ.get("PORT", int(config.get("FLASK_PORT", 5000))))
     app.run(host=config.get("FLASK_HOST", '0.0.0.0'), port=port)

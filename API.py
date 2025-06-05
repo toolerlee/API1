@@ -43,6 +43,22 @@ def main_job():
     from openpyxl.styles import Alignment, Font, Border, Side, Color
     from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
 
+    # --- NEW: Define output_dir earlier in main_job scope ---
+    folder_name = datetime.now().strftime('%Y%m%d_%H%M')
+    output_dir = os.path.join('output', folder_name)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        result_log = [] # Initialize result_log here after output_dir might be needed by it or other setup
+        result_log.append(f"輸出目錄已準備: {output_dir}")
+    except Exception as e_mkdir:
+        # If output_dir cannot be created, it's a critical error, log and potentially stop
+        print(f"CRITICAL: 無法創建輸出目錄 {output_dir}: {e_mkdir}")
+        status["result"] = f"錯誤: 無法創建輸出目錄 {output_dir}: {e_mkdir}"
+        status["progress"] = "目錄創建失敗"
+        status["running"] = False
+        return # Stop further execution
+    # --- End NEW ---
+
     # 初始化 OCR 實例 (在所有 import 之後，config 讀取之前或之後均可，但在 ThreadPoolExecutor 之前)
     # 使用 show_ad=False 可以避免一些不必要的日誌或行為
     try:
@@ -906,7 +922,7 @@ def main_job():
             for future in as_completed(futures):
                 try:
                     # NEW: fetch_account_data now returns data instead of appending to global all_data
-                    acc_name, acc_id, acc_data_rows, acc_extra_data_for_bonus2 = future.result() # Modified to get acc_extra_data for potential later use
+                    acc_name, acc_id, acc_data_rows = future.result() 
                     success_count += 1
                     result_log.append(f"帳號 {acc_name}_{acc_id} 資料獲取成功。準備寫入 bonus.xlsx。")
 

@@ -7,6 +7,8 @@ from copy import copy
 from openpyxl.styles import Alignment, Font, Border, Side, Color
 from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
 import gc # Import garbage collector
+import csv # Import CSV module
+from excel_processing_utils import _create_excel_from_csv_files # Import the new helper function
 
 print("=== Flask API 啟動 ===")
 
@@ -58,6 +60,14 @@ def main_job():
         status["running"] = False
         return # Stop further execution
     # --- End NEW ---
+
+    # 定義表頭 (移到 main_job 頂層，以便傳遞給 fetch_account_data_and_save_to_csv 和 _create_excel_from_csv_files)
+    headers_for_csv_and_excel = [
+        "獎金周期", "獎金周期", "消費對等", "經營分紅", "安置獎金", "推薦獎金",
+        "消費分紅", "經營對等", "收件中心", "新增加權", "小計", "其他加項",
+        "其他減項", "稅額", "補充費", "總計", "紅利積分", "電子錢包",
+        "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數"
+    ]
 
     # 初始化 OCR 實例 (在所有 import 之後，config 讀取之前或之後均可，但在 ThreadPoolExecutor 之前)
     # 使用 show_ad=False 可以避免一些不必要的日誌或行為
@@ -632,7 +642,7 @@ def main_job():
                     time.sleep(retry_delay)
                     return make_request(session, url, method, headers, data, retry_count+1)
                 raise
-        def fetch_account_data(name, ACCOUNT, PASSWORD, ocr):
+        def fetch_account_data_and_save_to_csv(name, ACCOUNT, PASSWORD, ocr, current_output_dir, headers_for_file):
             thread_id = threading.get_ident()
             
             def log_detail(message):
@@ -895,76 +905,52 @@ def main_job():
         result_log.append(f"\n開始處理，總帳號數量: {total_accounts}")
 
         # --- NEW: Prepare Workbook for bonus.xlsx before ThreadPool ---
-        wb_bonus_main = Workbook()
-        if 'Sheet' in wb_bonus_main.sheetnames:
-            del wb_bonus_main['Sheet']
-        
-        headers_for_excel_sheet = [
-            "獎金周期", "獎金周期", "消費對等", "經營分紅", "安置獎金", "推薦獎金",
-            "消費分紅", "經營對等", "收件中心", "新增加權", "小計", "其他加項",
-            "其他減項", "稅額", "補充費", "總計", "紅利積分", "電子錢包",
-            "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數"
-        ]
-        created_sheets_for_bonus_xlsx = {} # To track sheets and if header is written
+        # REMOVED: wb_bonus_main and related logic for direct Excel writing from threads
+        # headers_for_excel_sheet was moved up and renamed to headers_for_csv_and_excel
+        # created_sheets_for_bonus_xlsx = {} # REMOVED
         # --- End NEW ---
+
+        # --- Lists to keep track of CSV generation results ---
+        csv_generation_success = []
+        csv_generation_failed = []
+        # ---
 
         with ThreadPoolExecutor(max_workers=max_concurrent_accounts) as executor:
             futures = []
             started_count = 0
-            completed_count = 0
             for idx, (name, ACCOUNT, PASSWORD) in enumerate(accounts, 1):
-                futures.append(executor.submit(fetch_account_data, name, ACCOUNT, PASSWORD, ocr_instance))
+                # Pass output_dir and headers to the new function
+                futures.append(executor.submit(fetch_account_data_and_save_to_csv, name, ACCOUNT, PASSWORD, ocr_instance, output_dir, headers_for_csv_and_excel))
                 started_count += 1
-                status["progress"] = f"已提交任務: {started_count}/{total_accounts} (處理中: {completed_count}/{total_accounts})"
-                result_log.append(f"已啟動處理帳號: {started_count}/{total_accounts}")
+                status["progress"] = f"已提交CSV生成任務: {started_count}/{total_accounts} (處理中: ...)"
+                result_log.append(f"已啟動CSV生成處理帳號: {started_count}/{total_accounts} ({name}_{ACCOUNT})")
                 time.sleep(thread_start_delay)
             
+            completed_count = 0
             for future in as_completed(futures):
                 try:
-                    # NEW: fetch_account_data now returns data instead of appending to global all_data
-                    acc_name, acc_id, acc_data_rows = future.result() 
-                    success_count += 1
-                    result_log.append(f"帳號 {acc_name}_{acc_id} 資料獲取成功。準備寫入 bonus.xlsx。")
-
-                    # --- NEW: Write data directly to wb_bonus_main ---
-                    sheet_key = f"{acc_name}_{acc_id}"
-                    ws_target_bonus_main = None
-                    if sheet_key not in created_sheets_for_bonus_xlsx:
-                        ws_target_bonus_main = wb_bonus_main.create_sheet(sheet_key[:31])
-                        ws_target_bonus_main.append(headers_for_excel_sheet)
-                        created_sheets_for_bonus_xlsx[sheet_key] = ws_target_bonus_main
+                    # Get result from fetch_account_data_and_save_to_csv
+                    acc_name, acc_id, csv_saved, num_rows = future.result()
+                    if csv_saved:
+                        success_count += 1 # Count as success if CSV was saved
+                        csv_generation_success.append(f"{acc_name}_{acc_id} ({num_rows} 行)")
+                        result_log.append(f"帳號 {acc_name}_{acc_id} CSV資料儲存成功 ({num_rows} 行)。")
                     else:
-                        ws_target_bonus_main = created_sheets_for_bonus_xlsx[sheet_key]
-                    
-                    if acc_data_rows:
-                        for data_row in acc_data_rows:
-                            ws_target_bonus_main.append(data_row)
-                        result_log.append(f"  已將 {len(acc_data_rows)} 行數據寫入 {sheet_key} 工作表。")
-                    else:
-                        # If no data rows, we should still write a row with extra_data if Bonus2 needs it
-                        # For bonus.xlsx, if acc_data_rows is empty, the sheet will just have headers (or be empty if not even created).
-                        # The acc_extra_data (bonus_point, wallet, etc.) is part of each row in acc_data_rows.
-                        # If acc_data_rows is empty, then these specific values won't appear in bonus.xlsx data rows.
-                        # This is consistent with previous logic where empty all_data for an account led to empty sheet data.
-                        # The Bonus2.xlsx generation reads specific cells like 'Q2', 'R2' from these sheets.
-                        # If no data rows (including the one with extra_data) are written, 'Q2' etc. will be None.
-                        # Let's ensure that if acc_data_rows is empty, we write at least one row if acc_extra_data is present
-                        # to populate Q2, R2 for Bonus2.xlsx
-                        # The `acc_extra_data` is already part of `acc_data_rows` construction logic in `fetch_account_data`
-                        # The first row of `acc_data_rows` (if not empty) contains `extra_data`.
-                        # So, if `acc_data_rows` is empty, then the `extra_data` wasn't applicable or no transactions.
-                        result_log.append(f"  帳號 {sheet_key} 沒有獎金歷史數據列可寫入。")
-                    # --- End NEW ---
+                        # If csv_saved is False, it means an error occurred during CSV writing for that account.
+                        # The exception during login (e.g. LoginException) is handled separately below.
+                        csv_generation_failed.append(f"{acc_name}_{acc_id} (CSV儲存失敗)")
+                        result_log.append(f"帳號 {acc_name}_{acc_id} CSV資料儲存失敗。")
+                        # Optionally, add to failed_accounts list if not already covered by LoginException
 
-                except Exception as e:
+                except Exception as e: # This catches exceptions from login attempts or other unhandled issues in thread
                     msg = str(e)
-                    if '連續' in msg and '登入失敗' in msg:
-                        failed_accounts.append(msg)
-                    else:
-                        result_log.append(f"[警告] 非帳號登入失敗異常：{msg}")
+                    # Extract account info if possible (e.g. from exception message or by modifying return on fail)
+                    # For now, assuming LoginException provides this info in its message.
+                    failed_accounts.append(msg) # Keep track of accounts that failed login/processing
+                    result_log.append(f"[錯誤] 執行緒處理帳號時發生錯誤: {msg}")
                 finally:
                     completed_count += 1
-                    status["progress"] = f"處理中: {completed_count}/{total_accounts} (成功: {success_count})"
+                    status["progress"] = f"CSV處理中: {completed_count}/{total_accounts} (成功儲存CSV: {success_count})"
 
         end_time = time.time()
         total_time = end_time - start_time
@@ -979,26 +965,26 @@ def main_job():
         bonus2_file_path_local = None # For Bonus2.xlsx
         split_excel_files_paths = [] # For split files
 
-        if wb_bonus_main.sheetnames: # Check if any sheets were actually added
-            excel_file_path_local = os.path.join(output_dir, 'bonus.xlsx')
-            wb_bonus_main.save(excel_file_path_local)
-            result_log.append(f"主要 bonus.xlsx 已儲存於: {excel_file_path_local}")
-
+        # --- NEW: Create bonus.xlsx from generated CSV files ---
+        if success_count > 0: # Only proceed if at least one CSV was successfully generated
+            result_log.append(f"準備從 {output_dir} 中的 CSV 檔案創建主要的 bonus.xlsx ...")
+            target_bonus_xlsx_path = os.path.join(output_dir, "bonus.xlsx")
             try:
-                result_log.append(f"記憶體優化：嘗試釋放 bonus.xlsx 的 Workbook (wb_bonus_main)...")
-                if 'wb_bonus_main' in locals():
-                    del wb_bonus_main
-                if 'created_sheets_for_bonus_xlsx' in locals(): # also clear this helper dict
-                    del created_sheets_for_bonus_xlsx
-                collected_after_bonus_save = gc.collect()
-                result_log.append(f"記憶體優化：wb_bonus_main 釋放後 gc.collect() 清理了 {collected_after_bonus_save} 個物件。")
-            except Exception as e_gc_agg:
-                result_log.append(f"記憶體優化：釋放 wb_bonus_main 時發生錯誤: {str(e_gc_agg)}")
+                excel_file_path_local = _create_excel_from_csv_files(output_dir, target_bonus_xlsx_path, headers_for_csv_and_excel, result_log.append)
+                if excel_file_path_local:
+                    result_log.append(f"主要的 bonus.xlsx 已成功從 CSV 生成於: {excel_file_path_local}")
+                else:
+                    result_log.append(f"錯誤或警告: 未能從 CSV 檔案生成主要的 bonus.xlsx (可能沒有CSV檔案或處理失敗)。")
+            except Exception as e_csv_to_excel_call:
+                result_log.append(f"❌ 調用 _create_excel_from_csv_files 生成 bonus.xlsx 時發生嚴重錯誤: {e_csv_to_excel_call}")
+                excel_file_path_local = None # Ensure it's None on error
         else:
-            result_log.append("警告: bonus.xlsx 未包含任何工作表，因此未儲存。")
-            excel_file_path_local = None # Ensure it's None if not saved
+            result_log.append("沒有成功生成的 CSV 檔案，跳過 bonus.xlsx 的創建。")
+        # --- END NEW ---
+        
+        # REMOVED: The old block for direct Excel generation and its memory release for wb_bonus_main
 
-        # --- Generate Bonus2.xlsx and Split files (relies on excel_file_path_local) ---
+        # --- Generate Bonus2.xlsx and Split files (relies on excel_file_path_local from CSVs) ---
         if excel_file_path_local and os.path.exists(excel_file_path_local): # Check if bonus.xlsx was actually created and saved
             # ... (Bonus2 and split logic remains, it reads from excel_file_path_local) ...
             bonus2_filename = 'Bonus2.xlsx'

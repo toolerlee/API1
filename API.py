@@ -724,6 +724,10 @@ def get_status():
 def serve_index():
     return send_from_directory('.', 'index.html')
 
+@app.route('/version')
+def get_version():
+    return jsonify({"version": "v2", "message": "Deployment from 2025-06-06 is live."})
+
 @app.route('/api/account_file', methods=['GET', 'POST'])
 def manage_account_file():
     global config

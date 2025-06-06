@@ -701,6 +701,7 @@ def load_config():
     print('RENDER DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
     print('RENDER DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
     print('RENDER DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
+    print('DEBUG: 最終 dropbox_token =', repr(config['dropbox_token']))
 
 @app.route('/run_main', methods=['POST'])
 def run_main():
@@ -735,6 +736,7 @@ def debug_config():
 
 @app.route('/api/account_file', methods=['GET', 'POST'])
 def manage_account_file():
+    print('DEBUG: dropbox_token in manage_account_file =', repr(config.get('dropbox_token')))
     if request.method == 'GET':
         dbx_path = config.get('dropbox_account_file_path')
         dbx = dropbox.Dropbox(config.get('dropbox_token'))

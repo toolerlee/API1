@@ -709,16 +709,9 @@ def main_job():
 
 @app.route('/run_main', methods=['POST'])
 def run_main():
-    # 防呆：檢查 Content-Type
-    if not request.is_json:
-        return jsonify({"status": "error", "message": "Content-Type 必須為 application/json"}), 415
-    password = request.json.get('password')
-    if password != config.get('api_action_password'):
-        return jsonify({"status": "error", "message": "密碼錯誤"}), 403
-        
+    # 不再檢查密碼，任何人都能執行主要任務
     if status["running"]:
         return jsonify({"status": "busy", "message": "先前的任務仍在執行中，請稍後再試。"})
-    
     thread = threading.Thread(target=main_job)
     thread.start()
     return jsonify({"status": "started", "message": "主要腳本已啟動執行。"})

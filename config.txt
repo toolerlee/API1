@@ -1,13 +1,13 @@
 [DEFAULT]
-mode=0  # 0=一般模式, 1=重試模式
-max_concurrent_accounts=30 # 同時處理的帳號數量
-start_date=2025/01/01 # 獎金查詢開始日期
-end_date=2025/12/31   # 獎金查詢結束日期
-thread_start_delay=0.5 # 每個帳號開始處理前的延遲（秒）
-max_login_attempts=3   # 每個帳號的最大登入嘗試次數
-request_delay=2.0      # 每次請求之間的延遲（秒）
-max_request_retries=3  # 請求失敗時的最大重試次數
-retry_delay=3.0        # 重試前的延遲（秒）
+mode=0
+max_concurrent_accounts=30
+start_date=2025/01/01
+end_date=2025/12/31
+thread_start_delay=0.5
+max_login_attempts=3
+request_delay=2.0
+max_request_retries=3
+retry_delay=3.0
 
 # --- Dropbox Settings ---
 #dropbox_app_key=vjxxknfipwukyzs

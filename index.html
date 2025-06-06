@@ -247,93 +247,128 @@
             const uploadInput = document.getElementById('uploadFileInput');
             const editor = document.getElementById('accountEditor');
             
-            downloadBtn.addEventListener('click', async () => {
+            async function getPassword() {
                 const password = passwordInput.value;
-                if (!password) { showAdminStatus('錯誤: 請輸入管理密碼。', 'error'); return; }
-                showAdminStatus('正在下載...', 'info');
+                if (!password) {
+                    showAdminStatus('錯誤: 密碼為空，請在密碼框中輸入密碼。', 'error');
+                    return null;
+                }
+                return password;
+            }
+
+            downloadBtn.addEventListener('click', async () => {
+                const password = await getPassword();
+                if (!password) return;
+
+                showAdminStatus('正在下載 account.txt...', 'info');
                 try {
                     const response = await fetch(`/api/account_file?password=${encodeURIComponent(password)}`);
                     if (response.ok) {
                         const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
                         const a = document.createElement('a');
-                        a.href = window.URL.createObjectURL(blob);
+                        a.style.display = 'none';
+                        a.href = url;
                         a.download = 'account.txt';
+                        document.body.appendChild(a);
                         a.click();
+                        window.URL.revokeObjectURL(url);
                         a.remove();
-                        showAdminStatus('下載成功！', 'success');
+                        showAdminStatus('檔案下載成功！', 'success');
                     } else {
-                        const err = await response.json();
-                        showAdminStatus(`下載失敗: ${err.error || response.statusText}`, 'error');
+                        const errorData = await response.json();
+                        showAdminStatus(`下載失敗: ${errorData.error || response.statusText}`, 'error');
                     }
-                } catch (e) { showAdminStatus(`下載時發生網路錯誤: ${e.message}`, 'error'); }
+                } catch (error) {
+                    showAdminStatus(`下載時發生網路錯誤: ${error}`, 'error');
+                }
             });
 
             loadBtn.addEventListener('click', async () => {
-                const password = passwordInput.value;
-                if (!password) { showAdminStatus('錯誤: 請輸入管理密碼。', 'error'); return; }
-                showAdminStatus('正在讀取檔案...', 'info');
-                editor.value = '';
+                const password = await getPassword();
+                if (!password) return;
+
+                showAdminStatus('正在從雲端讀取檔案...', 'info');
                 try {
                     const response = await fetch(`/api/account_file?password=${encodeURIComponent(password)}`);
                     if (response.ok) {
                         editor.value = await response.text();
-                        showAdminStatus('檔案內容已成功讀取到編輯器。', 'success');
+                        showAdminStatus('檔案內容已成功讀取到編輯框。', 'success');
                     } else {
-                        const err = await response.json();
-                        showAdminStatus(`讀取失敗: ${err.error || response.statusText}`, 'error');
+                        const errorData = await response.json();
+                        showAdminStatus(`讀取失敗: ${errorData.error || response.statusText}`, 'error');
                     }
-                } catch (e) { showAdminStatus(`讀取時發生網路錯誤: ${e.message}`, 'error'); }
+                } catch (error) {
+                    showAdminStatus(`讀取時發生網路錯誤: ${error}`, 'error');
+                }
             });
             
             saveBtn.addEventListener('click', async () => {
-                const password = passwordInput.value;
-                if (!password) { showAdminStatus('錯誤: 請輸入管理密碼。', 'error'); return; }
-                if (editor.value.trim() === '' && !confirm("您確定要上傳一個空白的檔案嗎？")) {
-                    showAdminStatus('操作已取消。', 'info');
-                    return;
-                }
-                showAdminStatus('正在儲存變更...', 'info');
-                await uploadContent(password, editor.value);
-            });
+                const password = await getPassword();
+                if (!password) return;
 
-            uploadInput.addEventListener('change', (event) => {
-                const file = event.target.files[0];
-                const password = passwordInput.value;
-                if (!password) {
-                    showAdminStatus('錯誤: 請輸入管理密碼再選擇檔案。', 'error');
-                    event.target.value = null;
-                    return;
-                }
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        showAdminStatus(`已選擇檔案 ${file.name}，正在上傳...`, 'info');
-                        await uploadContent(password, e.target.result);
-                    };
-                    reader.onerror = () => showAdminStatus('讀取本地檔案時發生錯誤。', 'error');
-                    reader.readAsText(file);
-                }
-                event.target.value = null;
-            });
-
-            async function uploadContent(password, account_data) {
+                showAdminStatus('正在儲存變更到 Dropbox...', 'info');
                 try {
                     const response = await fetch('/api/account_file', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ password, account_data }),
+                        body: JSON.stringify({
+                            password: password,
+                            account_data: editor.value
+                        })
                     });
+                    const result = await response.json();
                     if (response.ok) {
-                        const result = await response.json();
-                        showAdminStatus(`操作成功: ${result.message}`, 'success');
+                        showAdminStatus('成功儲存檔案到 Dropbox！', 'success');
                     } else {
-                        const err = await response.json();
-                        showAdminStatus(`操作失敗: ${err.error || response.statusText}`, 'error');
+                        showAdminStatus(`儲存失敗: ${result.error || '未知錯誤'}`, 'error');
                     }
-                } catch (e) { showAdminStatus(`操作時發生網路錯誤: ${e.message}`, 'error'); }
-            }
+                } catch (error) {
+                    showAdminStatus(`儲存時發生網路錯誤: ${error}`, 'error');
+                }
+            });
             
-            getStatus();
+            uploadInput.addEventListener('change', async (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const password = await getPassword();
+                if (!password) return;
+
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const content = e.target.result;
+                    showAdminStatus('正在上傳檔案到 Dropbox...', 'info');
+                    try {
+                        const response = await fetch('/api/account_file', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                password: password,
+                                account_data: content
+                            })
+                        });
+                        const result = await response.json();
+                        if (response.ok) {
+                            showAdminStatus('檔案上傳成功！', 'success');
+                        } else {
+                            showAdminStatus(`上傳失敗: ${result.error || '未知錯誤'}`, 'error');
+                        }
+                    } catch (error) {
+                        showAdminStatus(`上傳時發生網路錯誤: ${error}`, 'error');
+                    }
+                };
+                reader.readAsText(file);
+                // Reset file input so the same file can be selected again
+                uploadInput.value = '';
+            });
+
+            // Auto-check status on page load only if a task might be running
+            getStatus().then(data => {
+                if (data && data.running) {
+                    intervalId = setInterval(getStatus, 2000);
+                }
+            });
         });
     </script>
 </body>

@@ -34,7 +34,54 @@ app = Flask(__name__)
 status = {"running": False, "result": None, "progress": "尚未開始"}
 config = {}
 
-# 立即初始化 config，確保雲端部署（gunicorn/wsgi）也會執行
+def load_config():
+    global config
+    parser = configparser.ConfigParser()
+    parser.read('config.txt', encoding='utf-8')
+
+    config = {
+        'dropbox_app_key': os.getenv('dropbox_app_key') or parser.get('DEFAULT', 'dropbox_app_key', fallback=None),
+        'dropbox_app_secret': os.getenv('dropbox_app_secret') or parser.get('DEFAULT', 'dropbox_app_secret', fallback=None),
+        'dropbox_refresh_token': os.getenv('dropbox_refresh_token') or parser.get('DEFAULT', 'dropbox_refresh_token', fallback=None),
+        'api_action_password': os.getenv('api_action_password') or parser.get('DEFAULT', 'api_action_password', fallback=None),
+        'dropbox_account_file_path': os.getenv('dropbox_account_file_path') or parser.get('DEFAULT', 'dropbox_account_file_path', fallback='/Apps/ExcelAPI-app/account/account.txt'),
+        'max_concurrent_accounts': parser.get('DEFAULT', 'max_concurrent_accounts', fallback='5'),
+        'start_date': parser.get('DEFAULT', 'start_date', fallback='2025/01/01'),
+        'end_date': parser.get('DEFAULT', 'end_date', fallback='2025/12/31'),
+        'thread_start_delay': parser.get('DEFAULT', 'thread_start_delay', fallback='0.5'),
+        'max_login_attempts': parser.get('DEFAULT', 'max_login_attempts', fallback='3'),
+        'request_delay': parser.get('DEFAULT', 'request_delay', fallback='2.0'),
+        'max_request_retries': parser.get('DEFAULT', 'max_request_retries', fallback='3'),
+        'retry_delay': parser.get('DEFAULT', 'retry_delay', fallback='3.0'),
+        'dropbox_folder': os.getenv('dropbox_folder') or parser.get('DEFAULT', 'dropbox_folder', fallback='/output'),
+        'dropbox_token': None
+    }
+    
+    print('DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
+    print('DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
+    print('DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
+    
+    if config['dropbox_refresh_token']:
+        try:
+            url = "https://api.dropbox.com/oauth2/token"
+            data = {"grant_type": "refresh_token", "refresh_token": config['dropbox_refresh_token']}
+            auth = (config['dropbox_app_key'], config['dropbox_app_secret'])
+            response = requests.post(url, data=data, auth=auth)
+            response.raise_for_status()
+            config['dropbox_token'] = response.json().get("access_token")
+            print("✅ 成功使用 Refresh Token 換取新的 Access Token。")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ 使用 Refresh Token 換取 Access Token 失敗: {e}")
+            if e.response: print(f"    錯誤回應: {e.response.text}")
+    else:
+        print("⚠️ 警告: 缺少 Dropbox Refresh Token，將無法與 Dropbox 互動。")
+
+    print('RENDER DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
+    print('RENDER DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
+    print('RENDER DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
+    print('DEBUG: 最終 dropbox_token =', repr(config['dropbox_token']))
+
+# 這裡才呼叫 load_config，確保所有函數都已定義
 load_config()
 
 global_color_map_for_reports = {
@@ -658,53 +705,6 @@ def main_job():
     status["progress"] = f"完成: {success_count}/{total_accounts}"
     status["running"] = False
     print("main_job 執行完畢.")
-
-def load_config():
-    global config
-    parser = configparser.ConfigParser()
-    parser.read('config.txt', encoding='utf-8')
-
-    config = {
-        'dropbox_app_key': os.getenv('dropbox_app_key') or parser.get('DEFAULT', 'dropbox_app_key', fallback=None),
-        'dropbox_app_secret': os.getenv('dropbox_app_secret') or parser.get('DEFAULT', 'dropbox_app_secret', fallback=None),
-        'dropbox_refresh_token': os.getenv('dropbox_refresh_token') or parser.get('DEFAULT', 'dropbox_refresh_token', fallback=None),
-        'api_action_password': os.getenv('api_action_password') or parser.get('DEFAULT', 'api_action_password', fallback=None),
-        'dropbox_account_file_path': os.getenv('dropbox_account_file_path') or parser.get('DEFAULT', 'dropbox_account_file_path', fallback='/Apps/ExcelAPI-app/account/account.txt'),
-        'max_concurrent_accounts': parser.get('DEFAULT', 'max_concurrent_accounts', fallback='5'),
-        'start_date': parser.get('DEFAULT', 'start_date', fallback='2025/01/01'),
-        'end_date': parser.get('DEFAULT', 'end_date', fallback='2025/12/31'),
-        'thread_start_delay': parser.get('DEFAULT', 'thread_start_delay', fallback='0.5'),
-        'max_login_attempts': parser.get('DEFAULT', 'max_login_attempts', fallback='3'),
-        'request_delay': parser.get('DEFAULT', 'request_delay', fallback='2.0'),
-        'max_request_retries': parser.get('DEFAULT', 'max_request_retries', fallback='3'),
-        'retry_delay': parser.get('DEFAULT', 'retry_delay', fallback='3.0'),
-        'dropbox_folder': os.getenv('dropbox_folder') or parser.get('DEFAULT', 'dropbox_folder', fallback='/output'),
-        'dropbox_token': None
-    }
-    
-    print('DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
-    print('DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
-    print('DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
-    
-    if config['dropbox_refresh_token']:
-        try:
-            url = "https://api.dropbox.com/oauth2/token"
-            data = {"grant_type": "refresh_token", "refresh_token": config['dropbox_refresh_token']}
-            auth = (config['dropbox_app_key'], config['dropbox_app_secret'])
-            response = requests.post(url, data=data, auth=auth)
-            response.raise_for_status()
-            config['dropbox_token'] = response.json().get("access_token")
-            print("✅ 成功使用 Refresh Token 換取新的 Access Token。")
-        except requests.exceptions.RequestException as e:
-            print(f"❌ 使用 Refresh Token 換取 Access Token 失敗: {e}")
-            if e.response: print(f"    錯誤回應: {e.response.text}")
-    else:
-        print("⚠️ 警告: 缺少 Dropbox Refresh Token，將無法與 Dropbox 互動。")
-
-    print('RENDER DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
-    print('RENDER DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
-    print('RENDER DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
-    print('DEBUG: 最終 dropbox_token =', repr(config['dropbox_token']))
 
 @app.route('/run_main', methods=['POST'])
 def run_main():

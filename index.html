@@ -158,16 +158,21 @@
         let intervalId = null;
 
         function runMain() {
-            fetch('/run_main', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('statusResult').value = `啟動狀態: ${data.message}`;
-                    getStatus(); 
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    document.getElementById('statusResult').value = '執行時發生錯誤。';
-                });
+            const password = document.getElementById('admin-password').value;
+            fetch('/run_main', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: password })
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('statusResult').value = `啟動狀態: ${data.message}`;
+                getStatus(); 
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('statusResult').value = '執行時發生錯誤。';
+            });
         }
 
         function manualCheck() {

@@ -709,6 +709,9 @@ def main_job():
 
 @app.route('/run_main', methods=['POST'])
 def run_main():
+    # 防呆：檢查 Content-Type
+    if not request.is_json:
+        return jsonify({"status": "error", "message": "Content-Type 必須為 application/json"}), 415
     password = request.json.get('password')
     if password != config.get('api_action_password'):
         return jsonify({"status": "error", "message": "密碼錯誤"}), 403

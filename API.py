@@ -674,6 +674,10 @@ def load_config():
         'dropbox_token': None
     }
     
+    print('DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
+    print('DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
+    print('DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
+    
     if config['dropbox_refresh_token']:
         try:
             url = "https://api.dropbox.com/oauth2/token"
@@ -688,6 +692,10 @@ def load_config():
             if e.response: print(f"    錯誤回應: {e.response.text}")
     else:
         print("⚠️ 警告: 缺少 Dropbox Refresh Token，將無法與 Dropbox 互動。")
+
+    print('RENDER DEBUG: dropbox_app_key =', repr(config['dropbox_app_key']))
+    print('RENDER DEBUG: dropbox_app_secret =', repr(config['dropbox_app_secret']))
+    print('RENDER DEBUG: dropbox_refresh_token =', repr(config['dropbox_refresh_token']))
 
 @app.route('/run_main', methods=['POST'])
 def run_main():

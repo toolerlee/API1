@@ -34,6 +34,9 @@ app = Flask(__name__)
 status = {"running": False, "result": None, "progress": "尚未開始"}
 config = {}
 
+# 立即初始化 config，確保雲端部署（gunicorn/wsgi）也會執行
+load_config()
+
 global_color_map_for_reports = {
     "紅利積分": "FF0000", "電子錢包": "00008B", "獎金暫存": "8B4513",
     "註冊分": "FF8C00", "商品券": "2F4F4F", "星級": "708090"
@@ -760,5 +763,4 @@ def manage_account_file():
 
 
 if __name__ == '__main__':
-    load_config()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

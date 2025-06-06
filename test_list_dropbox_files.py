@@ -4,13 +4,19 @@ import requests
 import dropbox
 
 # 讀取環境變數
-DROPBOX_REFRESH_TOKEN = '3oC3tEUkH4kAAAAAAAAAAZynwxJdINsFTND_BhYiGuAvzQChRlLJR5U4HClZJ3n_'
-DROPBOX_APP_KEY = 'vjxxknfipwukyzs'
-DROPBOX_APP_SECRET = '905vcme1i68i3ke'
+DROPBOX_REFRESH_TOKEN = os.getenv('dropbox_refresh_token')
+DROPBOX_APP_KEY = os.getenv('dropbox_app_key')
+DROPBOX_APP_SECRET = os.getenv('dropbox_app_secret')
+DROPBOX_ACCOUNT_FILE_PATH = os.getenv('dropbox_account_file_path')
 
 print('DEBUG: DROPBOX_REFRESH_TOKEN =', repr(DROPBOX_REFRESH_TOKEN))
 print('DEBUG: DROPBOX_APP_KEY =', repr(DROPBOX_APP_KEY))
 print('DEBUG: DROPBOX_APP_SECRET =', repr(DROPBOX_APP_SECRET))
+
+print('RENDER DEBUG: dropbox_app_key =', repr(os.getenv('dropbox_app_key')))
+print('RENDER DEBUG: dropbox_app_secret =', repr(os.getenv('dropbox_app_secret')))
+print('RENDER DEBUG: dropbox_refresh_token =', repr(os.getenv('dropbox_refresh_token')))
+print('RENDER DEBUG: dropbox_account_file_path =', repr(os.getenv('dropbox_account_file_path')))
 
 def get_access_token():
     url = "https://api.dropbox.com/oauth2/token"

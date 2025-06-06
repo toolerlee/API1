@@ -43,6 +43,11 @@ global_thin_border_for_reports = Border(
     top=Side(style='thin'), bottom=Side(style='thin')
 )
 
+print('RENDER DEBUG: dropbox_app_key =', repr(os.getenv('dropbox_app_key')))
+print('RENDER DEBUG: dropbox_app_secret =', repr(os.getenv('dropbox_app_secret')))
+print('RENDER DEBUG: dropbox_refresh_token =', repr(os.getenv('dropbox_refresh_token')))
+print('RENDER DEBUG: dropbox_account_file_path =', repr(os.getenv('dropbox_account_file_path')))
+
 def is_number_value(value):
     if value is None: return False
     try:

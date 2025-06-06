@@ -149,132 +149,40 @@ def _internal_generate_bonus2_report(source_bonus_xlsx_path, output_bonus2_xlsx_
             return False
         wb_source = openpyxl.load_workbook(source_bonus_xlsx_path, data_only=True)
         wb_target = openpyxl.Workbook()
-        if 'Sheet' in wb_target.sheetnames: wb_target.remove(wb_target.active)
+        if 'Sheet' in wb_target.sheetnames:
+            wb_target.remove(wb_target.active)
+        # 先建立人名到帳號sheet的 map
         person_sheets_map = defaultdict(list)
         for sheet_name_from_bonus in wb_source.sheetnames:
             name_raw_part = sheet_name_from_bonus.split("_")[0]
-            person_identifier = re.sub(r'\\d+', '', name_raw_part)
+            person_identifier = re.sub(r'\d+$', '', name_raw_part)
             person_sheets_map[person_identifier].append(sheet_name_from_bonus)
-        all_dates_globally = set()
-        for _, source_sheet_names in person_sheets_map.items():
-            for s_name in source_sheet_names:
-                ws_s = wb_source[s_name]
-                dates_in_sheet = [row[0] for row in ws_s.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True) if row[0] is not None]
-                all_dates_globally.update(dates_in_sheet)
-        sorted_all_dates_desc = sorted(list(all_dates_globally), reverse=True)
-        for person_id, source_sheet_names_for_person in person_sheets_map.items():
-            if not source_sheet_names_for_person: continue
-            sorted_source_sheets_for_person = sort_sheets_by_gold_level_in_api(source_sheet_names_for_person, wb_source)
+        # 欄位標題
+        headers = ["帳號名稱", "帳號", "紅利積分", "電子錢包", "獎金暫存", "註冊分", "商品券", "星級", "左區人數", "右區人數", "總計"]
+        col_map = {
+            "紅利積分": 'Q', "電子錢包": 'R', "獎金暫存": 'S', "註冊分": 'T', "商品券": 'U', "星級": 'V',
+            "左區人數": 'W', "右區人數": 'X', "總計": 'M'
+        }
+        for person_id, sheet_names in person_sheets_map.items():
             ws_target = wb_target.create_sheet(title=person_id[:31])
-            ws_target['A1'] = "名稱"
-            apply_formatting_to_cell(ws_target['A1'], bold=True, border=global_thin_border_for_reports)
-            for col_idx_acc, sheet_name_src in enumerate(sorted_source_sheets_for_person):
-                name_part = sheet_name_src.split('_')[0]
-                target_cell_name = ws_target.cell(row=1, column=2 + col_idx_acc, value=name_part)
-                apply_formatting_to_cell(target_cell_name, bold=True, border=global_thin_border_for_reports)
-            titles_for_a2_a7 = ["紅利積分", "電子錢包", "獎金暫存", "註冊分", "商品券", "星級"]
-            source_col_letters_for_a2_a7_data = ['Q', 'R', 'S', 'T', 'U', 'V']
-            for row_offset, title_a_col in enumerate(titles_for_a2_a7):
-                current_row_bonus2 = 2 + row_offset
-                cell_a_title = ws_target.cell(row=current_row_bonus2, column=1, value=title_a_col)
-                font_clr = global_color_map_for_reports.get(title_a_col)
-                apply_formatting_to_cell(cell_a_title, bold=True, font_color_hex=font_clr, border=global_thin_border_for_reports)
-                for acc_col_idx, sheet_name_src in enumerate(sorted_source_sheets_for_person):
-                    ws_src_current_acc = wb_source[sheet_name_src]
-                    source_cell_value = ws_src_current_acc[f'{source_col_letters_for_a2_a7_data[row_offset]}2'].value
-                    target_data_cell = ws_target.cell(row=current_row_bonus2, column=2 + acc_col_idx)
-                    if is_number_value(source_cell_value):
-                        target_data_cell.value = float(str(source_cell_value).replace(',', ''))
-                        target_data_cell.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-                    else:
-                        target_data_cell.value = source_cell_value
-                    apply_formatting_to_cell(target_data_cell, bold=True, font_color_hex=font_clr, border=global_thin_border_for_reports)
-            ws_target['A8'] = "帳號"
-            apply_formatting_to_cell(ws_target['A8'], bold=True, border=global_thin_border_for_reports)
-            for col_idx_acc, sheet_name_src in enumerate(sorted_source_sheets_for_person):
-                acc_num_part = sheet_name_src.split('_', 1)[-1] if '_' in sheet_name_src else sheet_name_src
-                target_cell_acc_num = ws_target.cell(row=8, column=2 + col_idx_acc, value=acc_num_part)
-                apply_formatting_to_cell(target_cell_acc_num, border=global_thin_border_for_reports)
-            ws_target['A9'] = "左右人數"
-            apply_formatting_to_cell(ws_target['A9'], bold=True, font_color_hex="006400", border=global_thin_border_for_reports)
-            for col_idx_acc, sheet_name_src in enumerate(sorted_source_sheets_for_person):
-                ws_src_current_acc = wb_source[sheet_name_src]
-                left_count_val = ws_src_current_acc['W2'].value
-                right_count_val = ws_src_current_acc['X2'].value
-                lr_text = f"{left_count_val or 0} <> {right_count_val or 0}"
-                target_cell_lr = ws_target.cell(row=9, column=2 + col_idx_acc, value=lr_text)
-                apply_formatting_to_cell(target_cell_lr, font_color_hex="006400", border=global_thin_border_for_reports)
-            ws_target['A10'] = "總計"
-            apply_formatting_to_cell(ws_target['A10'], bold=True, font_color_hex="8B008B", border=global_thin_border_for_reports)
-            for date_row_idx, date_val in enumerate(sorted_all_dates_desc):
-                cell_date = ws_target.cell(row=11 + date_row_idx, column=1, value=date_val)
-                if isinstance(date_val, datetime): cell_date.number_format = 'YYYY/MM/DD'
-                apply_formatting_to_cell(cell_date, border=global_thin_border_for_reports)
-            for acc_col_idx, sheet_name_src in enumerate(sorted_source_sheets_for_person):
-                ws_src_current_acc = wb_source[sheet_name_src]
-                date_to_m_column_value_map = {}
-                for src_row_data in ws_src_current_acc.iter_rows(min_row=2, max_col=13, values_only=True):
-                    date_in_src_row = src_row_data[0]
-                    m_column_value_in_src_row = src_row_data[12] if len(src_row_data) > 12 else None
-                    if date_in_src_row is not None: date_to_m_column_value_map[date_in_src_row] = m_column_value_in_src_row
-                sum_for_this_account_col_10 = 0
-                for date_row_idx, date_val_target in enumerate(sorted_all_dates_desc):
-                    value_for_date = date_to_m_column_value_map.get(date_val_target)
-                    data_cell = ws_target.cell(row=11 + date_row_idx, column=2 + acc_col_idx)
-                    if is_number_value(value_for_date):
-                        numeric_value = float(str(value_for_date).replace(',', ''))
-                        data_cell.value = numeric_value
-                        data_cell.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-                        sum_for_this_account_col_10 += numeric_value
-                    else:
-                        data_cell.value = value_for_date
-                    apply_formatting_to_cell(data_cell, border=global_thin_border_for_reports)
-                target_cell_total_r10_calculated = ws_target.cell(row=10, column=2 + acc_col_idx)
-                target_cell_total_r10_calculated.value = sum_for_this_account_col_10
-                target_cell_total_r10_calculated.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-                apply_formatting_to_cell(target_cell_total_r10_calculated, bold=True, font_color_hex="8B008B", border=global_thin_border_for_reports)
-            num_data_cols_for_person = len(sorted_source_sheets_for_person)
-            usd_total_col_bonus2 = 2 + num_data_cols_for_person
-            twd_total_col_bonus2 = usd_total_col_bonus2 + 1
-            ws_target.cell(row=9, column=usd_total_col_bonus2, value="美元收入").font = Font(color="8B008B", bold=True)
-            apply_formatting_to_cell(ws_target.cell(row=9, column=usd_total_col_bonus2), border=global_thin_border_for_reports)
-            ws_target.cell(row=9, column=twd_total_col_bonus2, value="台幣收入").font = Font(color="0000FF", bold=True)
-            apply_formatting_to_cell(ws_target.cell(row=9, column=twd_total_col_bonus2), border=global_thin_border_for_reports)
-            sum_usd_row10 = sum(ws_target.cell(row=10, column=2 + i).value or 0 for i in range(num_data_cols_for_person) if is_number_value(ws_target.cell(row=10, column=2 + i).value))
-            cell_usd_total_r10 = ws_target.cell(row=10, column=usd_total_col_bonus2, value=sum_usd_row10)
-            cell_usd_total_r10.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-            apply_formatting_to_cell(cell_usd_total_r10, bold=True, font_color_hex="8B008B", border=global_thin_border_for_reports)
-            twd_val_r10 = sum_usd_row10 * 33
-            cell_twd_total_r10 = ws_target.cell(row=10, column=twd_total_col_bonus2, value=twd_val_r10)
-            cell_twd_total_r10.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-            apply_formatting_to_cell(cell_twd_total_r10, bold=True, font_color_hex="0000FF", border=global_thin_border_for_reports)
-            for date_row_idx_calc in range(len(sorted_all_dates_desc)):
-                current_data_row_bonus2 = 11 + date_row_idx_calc
-                sum_usd_for_date_row = sum(ws_target.cell(row=current_data_row_bonus2, column=2 + i).value or 0 for i in range(num_data_cols_for_person) if is_number_value(ws_target.cell(row=current_data_row_bonus2, column=2 + i).value))
-                cell_usd_date_row = ws_target.cell(row=current_data_row_bonus2, column=usd_total_col_bonus2, value=sum_usd_for_date_row)
-                cell_usd_date_row.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-                apply_formatting_to_cell(cell_usd_date_row, font_color_hex="8B008B", border=global_thin_border_for_reports)
-                twd_val_for_date_row = sum_usd_for_date_row * 33
-                cell_twd_date_row = ws_target.cell(row=current_data_row_bonus2, column=twd_total_col_bonus2, value=twd_val_for_date_row)
-                cell_twd_date_row.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-                apply_formatting_to_cell(cell_twd_date_row, font_color_hex="0000FF", border=global_thin_border_for_reports)
-            sum_electronic_wallet = sum(ws_target.cell(row=3, column=2 + i).value or 0 for i in range(num_data_cols_for_person) if is_number_value(ws_target.cell(row=3, column=2 + i).value))
-            cell_sum_ew = ws_target.cell(row=3, column=usd_total_col_bonus2, value=sum_electronic_wallet)
-            cell_sum_ew.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-            apply_formatting_to_cell(cell_sum_ew, bold=True, font_color_hex=global_color_map_for_reports.get("電子錢包"), border=global_thin_border_for_reports)
-            ws_target.cell(row=3, column=twd_total_col_bonus2, value="←電子錢包總和").font = Font(color=global_color_map_for_reports.get("電子錢包"), bold=True)
-            apply_formatting_to_cell(ws_target.cell(row=3, column=twd_total_col_bonus2), border=global_thin_border_for_reports, alignment_horizontal='left')
-            sum_bonus_storage = sum(ws_target.cell(row=4, column=2 + i).value or 0 for i in range(num_data_cols_for_person) if is_number_value(ws_target.cell(row=4, column=2 + i).value))
-            cell_sum_bs = ws_target.cell(row=4, column=usd_total_col_bonus2, value=sum_bonus_storage)
-            cell_sum_bs.number_format = FORMAT_NUMBER_COMMA_SEPARATED1
-            apply_formatting_to_cell(cell_sum_bs, bold=True, font_color_hex=global_color_map_for_reports.get("獎金暫存"), border=global_thin_border_for_reports)
-            ws_target.cell(row=4, column=twd_total_col_bonus2, value="←獎金暫存總和").font = Font(color=global_color_map_for_reports.get("獎金暫存"), bold=True)
-            apply_formatting_to_cell(ws_target.cell(row=4, column=twd_total_col_bonus2), border=global_thin_border_for_reports, alignment_horizontal='left')
-            ws_target.column_dimensions['A'].width = 12
-            for i in range(num_data_cols_for_person):
-                ws_target.column_dimensions[openpyxl.utils.get_column_letter(2 + i)].width = 15
-            ws_target.column_dimensions[openpyxl.utils.get_column_letter(usd_total_col_bonus2)].width = 15
-            ws_target.column_dimensions[openpyxl.utils.get_column_letter(twd_total_col_bonus2)].width = 15
+            for col_idx, h in enumerate(headers, 1):
+                ws_target.cell(row=1, column=col_idx, value=h)
+            row_idx = 2
+            for sheet_name in sheet_names:
+                ws_src = wb_source[sheet_name]
+                # 帳號名稱、帳號
+                acc_name = sheet_name.split('_')[0]
+                acc_num = sheet_name.split('_')[1] if '_' in sheet_name else ''
+                # 取各欄位資料
+                row = [acc_name, acc_num]
+                for key in ["紅利積分", "電子錢包", "獎金暫存", "註冊分", "商品券", "星級"]:
+                    row.append(ws_src[f'{col_map[key]}2'].value)
+                row.append(ws_src['W2'].value)  # 左區人數
+                row.append(ws_src['X2'].value)  # 右區人數
+                row.append(ws_src['M2'].value)  # 總計
+                for col_idx, val in enumerate(row, 1):
+                    ws_target.cell(row=row_idx, column=col_idx, value=val)
+                row_idx += 1
         wb_target.save(output_bonus2_xlsx_path)
         result_log.append(f"✅ Bonus2.xlsx 已成功生成並儲存於 {output_bonus2_xlsx_path}")
         if 'wb_source' in locals(): del wb_source; gc.collect()

@@ -14,7 +14,7 @@ dropbox_app_secret=905vcme1i68i3ke
 dropbox_refresh_token=3oC3tEUkH4kAAAAAAAAAAZynwxJdINsFTND_BhYiGuAvzQChRlLJR5U4HClZJ3n_
 # dropbox_token=your_short_lived_access_token_here # 這個通常由程式自動取得，但可以手動設定用於測試
 # --- API and File Settings ---
-dropbox_account_file_path=/Apps/ExcelAPI-app/account/account.txt # Dropbox 中帳號檔案的絕對路徑
+dropbox_account_file_path=/account/account.txt # Dropbox 中帳號檔案的相對路徑 (相對於 App Folder)
 dropbox_folder=/output  # 上傳報表的 Dropbox 資料夾
 # --- Security Settings ---
 api_action_password=CHANGEME # 用於執行下載/上傳 account.txt 的密碼

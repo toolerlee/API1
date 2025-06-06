@@ -221,129 +221,75 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            const passwordInput = document.getElementById('admin-password');
-            const actionsContainer = document.getElementById('adminActionsContainer');
-
             const downloadBtn = document.getElementById('download-account-btn');
-            const loadBtn = document.getElementById('edit-account-btn');
+            const uploadBtn = document.getElementById('upload-account-btn');
+            const editBtn = document.getElementById('edit-account-btn');
             const saveBtn = document.getElementById('save-account-btn');
-            const uploadInput = document.getElementById('uploadFileInput');
             const editor = document.getElementById('account-content');
-            
-            async function getPassword() {
-                const password = passwordInput.value;
-                if (!password) {
-                    showAdminStatus('錯誤: 密碼為空，請在密碼框中輸入密碼。', 'error');
-                    return null;
-                }
-                return password;
-            }
+            const errorMsg = document.getElementById('account-error-msg');
 
+            // 下載 account.txt
             downloadBtn.addEventListener('click', async () => {
-                const password = await getPassword();
-                if (!password) return;
-
-                showAdminStatus('正在下載 account.txt...', 'info');
-                try {
-                    const response = await fetch(`/api/account_file?password=${encodeURIComponent(password)}`);
-                    if (response.ok) {
-                        const blob = await response.blob();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.style.display = 'none';
-                        a.href = url;
-                        a.download = 'account.txt';
-                        document.body.appendChild(a);
-                        a.click();
-                        window.URL.revokeObjectURL(url);
-                        a.remove();
-                        showAdminStatus('檔案下載成功！', 'success');
-                    } else {
-                        const errorData = await response.json();
-                        showAdminStatus(`下載失敗: ${errorData.error || response.statusText}`, 'error');
-                    }
-                } catch (error) {
-                    showAdminStatus(`下載時發生網路錯誤: ${error}`, 'error');
+                errorMsg.textContent = '';
+                const res = await fetch('/api/account_file');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    // 下載檔案
+                    const blob = new Blob([data.content], {type: 'text/plain'});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'account.txt';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } else {
+                    errorMsg.textContent = '下載失敗: ' + data.message;
                 }
             });
 
-            loadBtn.addEventListener('click', async () => {
-                const password = await getPassword();
-                if (!password) return;
-
-                showAdminStatus('正在從雲端讀取檔案...', 'info');
-                try {
-                    const response = await fetch(`/api/account_file?password=${encodeURIComponent(password)}`);
-                    if (response.ok) {
-                        editor.value = await response.text();
-                        showAdminStatus('檔案內容已成功讀取到編輯框。', 'success');
-                    } else {
-                        const errorData = await response.json();
-                        showAdminStatus(`讀取失敗: ${errorData.error || response.statusText}`, 'error');
-                    }
-                } catch (error) {
-                    showAdminStatus(`讀取時發生網路錯誤: ${error}`, 'error');
+            // 讀取雲端檔案進行編輯
+            editBtn.addEventListener('click', async () => {
+                errorMsg.textContent = '';
+                const res = await fetch('/api/account_file');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    editor.value = data.content;
+                } else {
+                    errorMsg.textContent = '讀取失敗: ' + data.message;
                 }
             });
-            
+
+            // 儲存編輯內容到 Dropbox
             saveBtn.addEventListener('click', async () => {
-                const password = await getPassword();
-                if (!password) return;
-
-                showAdminStatus('正在儲存變更到 Dropbox...', 'info');
-                try {
-                    const response = await fetch('/api/account_file', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            password: password,
-                            account_data: editor.value
-                        })
-                    });
-                    const result = await response.json();
-                    if (response.ok) {
-                        showAdminStatus('成功儲存檔案到 Dropbox！', 'success');
-                    } else {
-                        showAdminStatus(`儲存失敗: ${result.error || '未知錯誤'}`, 'error');
-                    }
-                } catch (error) {
-                    showAdminStatus(`儲存時發生網路錯誤: ${error}`, 'error');
+                errorMsg.textContent = '';
+                const content = editor.value;
+                const res = await fetch('/api/account_file', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({content})
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    errorMsg.textContent = '儲存成功！';
+                } else {
+                    errorMsg.textContent = '儲存失敗: ' + data.message;
                 }
             });
-            
-            uploadInput.addEventListener('change', async (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
 
-                const password = await getPassword();
-                if (!password) return;
-
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    const content = e.target.result;
-                    showAdminStatus('正在上傳檔案到 Dropbox...', 'info');
-                    try {
-                        const response = await fetch('/api/account_file', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                password: password,
-                                account_data: content
-                            })
-                        });
-                        const result = await response.json();
-                        if (response.ok) {
-                            showAdminStatus('檔案上傳成功！', 'success');
-                        } else {
-                            showAdminStatus(`上傳失敗: ${result.error || '未知錯誤'}`, 'error');
-                        }
-                    } catch (error) {
-                        showAdminStatus(`上傳時發生網路錯誤: ${error}`, 'error');
-                    }
+            // 從本機選擇檔案上傳
+            uploadBtn.addEventListener('click', () => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.txt';
+                input.onchange = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const text = await file.text();
+                    editor.value = text;
                 };
-                reader.readAsText(file);
-                // Reset file input so the same file can be selected again
-                uploadInput.value = '';
+                input.click();
             });
 
             // Auto-check status on page load only if a task might be running

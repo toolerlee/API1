@@ -137,26 +137,20 @@
             <textarea id="statusResult" readonly placeholder="任務狀態將會顯示在這裡..."></textarea>
         </div>
 
-        <div class="panel">
+        <div class="account-admin-panel">
             <h2>帳號管理 (Admin)</h2>
-            <p>請輸入管理密碼來解鎖帳號檔案的上傳/下載/編輯功能。</p>
-            <div class="unlock-wrapper">
-                <input type="password" id="adminPassword" placeholder="輸入 API_ACTION_PASSWORD">
-                <button id="unlockBtn" class="btn-secondary">解鎖</button>
+            <div style="margin-bottom: 1em;">
+                <label>請輸入管理密碼來執行帳號檔案的上傳/下載/編輯功能：</label>
+                <input type="password" id="admin-password" placeholder="請輸入密碼" style="width: 200px;" />
             </div>
-            
-            <div id="adminActionsContainer" style="display: none;">
-                <hr style="margin: 1.5rem 0; border-color: var(--border-color);">
-                <button id="downloadBtn" class="btn-secondary">下載 account.txt</button>
-                <button class="btn-secondary" onclick="document.getElementById('uploadFileInput').click();">從本機選擇檔案上傳</button>
-                <br><br>
-                <button id="loadBtn" class="btn-primary">讀取雲端檔案進行編輯</button>
-                <button id="saveBtn" class="btn-success">儲存編輯內容到 Dropbox</button>
-                <textarea id="accountEditor" placeholder="點擊「讀取雲端檔案進行編輯」後，檔案內容會顯示在這裡。"></textarea>
-                <input type="file" id="uploadFileInput" accept=".txt">
+            <div style="margin-bottom: 1em;">
+                <button id="download-account-btn">下載 account.txt</button>
+                <button id="upload-account-btn">從本機選擇檔案上傳</button>
+                <button id="edit-account-btn">讀取雲端檔案進行編輯</button>
+                <button id="save-account-btn" style="background: #3c6; color: #fff;">儲存編輯內容到 Dropbox</button>
             </div>
-            
-            <div id="adminStatus" class="status-message"></div>
+            <textarea id="account-content" rows="8" style="width: 100%;" placeholder="點擊『讀取雲端檔案進行編輯』後，檔案內容會顯示於此處。"></textarea>
+            <div id="account-error-msg" style="color: #c00; margin-top: 1em;"></div>
         </div>
     </div>
 
@@ -227,25 +221,14 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            const passwordInput = document.getElementById('adminPassword');
-            const unlockBtn = document.getElementById('unlockBtn');
+            const passwordInput = document.getElementById('admin-password');
             const actionsContainer = document.getElementById('adminActionsContainer');
 
-            unlockBtn.addEventListener('click', () => {
-                if (!passwordInput.value) {
-                    showAdminStatus('錯誤: 請先輸入管理密碼再解鎖。', 'error');
-                    actionsContainer.style.display = 'none';
-                } else {
-                    showAdminStatus('管理功能已解鎖。請注意，每次操作仍會獨立驗證密碼。', 'info');
-                    actionsContainer.style.display = 'block';
-                }
-            });
-
-            const downloadBtn = document.getElementById('downloadBtn');
-            const loadBtn = document.getElementById('loadBtn');
-            const saveBtn = document.getElementById('saveBtn');
+            const downloadBtn = document.getElementById('download-account-btn');
+            const loadBtn = document.getElementById('edit-account-btn');
+            const saveBtn = document.getElementById('save-account-btn');
             const uploadInput = document.getElementById('uploadFileInput');
-            const editor = document.getElementById('accountEditor');
+            const editor = document.getElementById('account-content');
             
             async function getPassword() {
                 const password = passwordInput.value;

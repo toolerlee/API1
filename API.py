@@ -528,6 +528,7 @@ def fetch_account_data_and_save_to_csv(name, user_account_id, user_password, ocr
 
 def main_job():
     global status, config
+    print('DEBUG: main_job 啟動時 dropbox_token =', repr(config.get('dropbox_token')))
     status["running"] = True
     status["result"] = "處理中...請稍候..."
     status["progress"] = "初始化中..."

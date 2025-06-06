@@ -723,9 +723,6 @@ def debug_config():
 @app.route('/api/account_file', methods=['GET', 'POST'])
 def manage_account_file():
     if request.method == 'GET':
-        password = request.args.get('password')
-        if password != config.get('api_action_password'):
-            return jsonify({"status": "error", "message": "密碼錯誤"}), 403
         dbx_path = config.get('dropbox_account_file_path')
         dbx = dropbox.Dropbox(config.get('dropbox_token'))
         try:
@@ -737,9 +734,6 @@ def manage_account_file():
 
     if request.method == 'POST':
         data = request.get_json()
-        password = data.get('password')
-        if password != config.get('api_action_password'):
-            return jsonify({"status": "error", "message": "密碼錯誤"}), 403
         content = data.get('content')
         dbx_path = config.get('dropbox_account_file_path')
         dbx = dropbox.Dropbox(config.get('dropbox_token'))

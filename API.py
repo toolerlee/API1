@@ -26,6 +26,7 @@ from datetime import datetime
 import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
+import pytz
 
 print("=== Flask API 啟動 ===")
 
@@ -33,6 +34,8 @@ app = Flask(__name__)
 
 status = {"running": False, "result": None, "progress": "尚未開始"}
 config = {}
+
+tz_taipei = pytz.timezone('Asia/Taipei')
 
 def load_config():
     global config
@@ -292,7 +295,7 @@ def _internal_split_bonus2_sheets(bonus2_xlsx_path, output_directory_for_split_f
             result_log.append(f"❌ 錯誤: Bonus2.xlsx '{bonus2_xlsx_path}' 不存在，無法分割。")
             return []
         workbook_to_split = openpyxl.load_workbook(bonus2_xlsx_path)
-        date_str_prefix = datetime.now().strftime("%Y%m%d")
+        date_str_prefix = datetime.now(tz_taipei).strftime("%Y%m%d")
         if not os.path.exists(output_directory_for_split_files):
             os.makedirs(output_directory_for_split_files, exist_ok=True)
         for sheet_name_to_split in workbook_to_split.sheetnames:
@@ -311,7 +314,7 @@ def _internal_split_bonus2_sheets(bonus2_xlsx_path, output_directory_for_split_f
                     new_cell.value = cell.value
                     if cell.has_style:
                         copy_cell_format_for_api(cell, new_cell)
-            split_filename = f"{date_str_prefix}{sheet_name_to_split}.xlsx"
+            split_filename = f"{date_str_prefix}_{sheet_name_to_split}.xlsx"
             full_split_filepath = os.path.join(output_directory_for_split_files, split_filename)
             new_wb_for_sheet.save(full_split_filepath)
             split_files_generated_paths.append(full_split_filepath)
@@ -536,7 +539,7 @@ def main_job():
     
     result_log = []
     
-    folder_name = datetime.now().strftime('%Y%m%d_%H%M')
+    folder_name = datetime.now(tz_taipei).strftime('%Y%m%d_%H%M')
     output_dir = os.path.join('資料夾路徑', folder_name)
     try:
         os.makedirs(output_dir, exist_ok=True)

@@ -1,6 +1,6 @@
 [DEFAULT]
 mode=0
-max_concurrent_accounts=30
+max_concurrent_accounts=5
 start_date=2025/01/01
 end_date=2025/12/31
 thread_start_delay=0.5
